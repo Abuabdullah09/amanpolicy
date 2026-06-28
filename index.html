@@ -1782,17 +1782,15 @@ async function doLogin(){
   let email = input;
   if(!input.includes('@')){
     const {data:p} = await sb.from('profiles').select('email').eq('username', input).single();
-    if(!p || !p.email){
-      btn.disabled = false;
-      btn.textContent = lang==='ar' ? '← تسجيل الدخول' : 'Sign In →';
-      err.style.display='block';
-      err.textContent = lang==='ar' ? 'اسم المستخدم غير موجود' : 'Username not found';
-      return;
-    }
-    email = p.email;
+    if(p && p.email) email = p.email;
+    else email = input + '@aman.internal';
   }
 
-  const {error} = await sb.auth.signInWithPassword({email, password:pass});
+  let {error} = await sb.auth.signInWithPassword({email, password:pass});
+  if(error && !input.includes('@')){
+    const res = await sb.auth.signInWithPassword({email: input + '@aman.internal', password:pass});
+    error = res.error;
+  }
   btn.disabled = false;
   btn.textContent = lang==='ar' ? '← تسجيل الدخول' : 'Sign In →';
   if(error){
@@ -1811,17 +1809,21 @@ async function doLogout(){
 }
 
 async function loadAllData(){
-  const {data:pRows} = await sb.from('profiles').select('*');
-  users = (pRows||[]).map(p=>({id:p.id, name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee'}));
+  try {
+    const {data:pRows} = await sb.from('profiles').select('*');
+    users = (pRows||[]).map(p=>({id:p.id, name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee'}));
+  } catch(e){ console.warn('profiles load failed', e); }
 
-  const [{data:cRows},{data:rRows},{data:eRows}] = await Promise.all([
-    sb.from('contacts').select('*').order('id'),
-    sb.from('requests').select('*').order('id'),
-    sb.from('employees').select('*').order('id'),
-  ]);
-  contacts  = (cRows ||[]).map(r=>({...r.data,  id:r.id}));
-  requests  = (rRows ||[]).map(r=>({...r.data,  id:r.id}));
-  employees = (eRows ||[]).map(r=>({...r.data,  id:r.id}));
+  try {
+    const [{data:cRows},{data:rRows},{data:eRows}] = await Promise.all([
+      sb.from('contacts').select('*').order('id'),
+      sb.from('requests').select('*').order('id'),
+      sb.from('employees').select('*').order('id'),
+    ]);
+    contacts  = (cRows ||[]).map(r=>({...r.data,  id:r.id}));
+    requests  = (rRows ||[]).map(r=>({...r.data,  id:r.id}));
+    employees = (eRows ||[]).map(r=>({...r.data,  id:r.id}));
+  } catch(e){ console.warn('data load failed', e); }
   const maxRef = requests.reduce((m,r)=>{ const n=(r.ref||'').match(/REQ-\d+-(\d+)/); return n?Math.max(m,+n[1]):m; },0);
   reqCounter = maxRef + 1;
 }
