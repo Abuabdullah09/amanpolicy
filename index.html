@@ -1811,7 +1811,7 @@ async function doLogout(){
 async function loadAllData(){
   try {
     const {data:pRows} = await sb.from('profiles').select('*');
-    users = (pRows||[]).map(p=>({id:p.id, name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee'}));
+    users = (pRows||[]).map(p=>({id:p.id, name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
   } catch(e){ console.warn('profiles load failed', e); }
 
   try {
@@ -1836,7 +1836,7 @@ async function afterLogin(user){
   };
   try {
     const {data:p} = await sb.from('profiles').select('*').eq('id',user.id).single();
-    if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.role=p.role||'superadmin'; curUser.dept=p.dept||'all'; }
+    if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.role=p.role||'superadmin'; curUser.dept=p.dept||'all'; curUser.pages=p.pages||null; }
   } catch(e){ console.warn('profile load failed', e); }
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
   document.getElementById('loginScreen').style.display = 'none';
@@ -1861,12 +1861,15 @@ async function initApp(){
    ════════════════════════════════════════ */
 
 /* هل يقدر المستخدم يدخل هذا القسم؟ */
-function canAccess(page){
-  if(!curUser) return false;
-  if(curUser.role === 'superadmin') return true;
+function pageLevel(page){
+  if(!curUser) return 'none';
+  if(curUser.role==='superadmin') return 'edit';
   const pages = curUser.pages || defaultPages(curUser);
-  return pages.includes(page);
+  if(Array.isArray(pages)) return pages.includes(page) ? 'edit' : 'none';
+  return pages[page] || 'none';
 }
+function canAccess(page){ return pageLevel(page) !== 'none'; }
+function canEdit(page){ return pageLevel(page) === 'edit'; }
 
 function isMgr(){
   return curUser && (curUser.role === 'superadmin' || curUser.role === 'manager');
@@ -2187,7 +2190,7 @@ function dashSales(){
   <div class="card" style="margin-top:18px">
     <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center">
       <span class="card-tt">${a('آخر الطلبات','Recent Requests')}</span>
-      ${isMgr()||curUser ? `<button class="btn btn-p btn-sm" onclick="if(typeof salesNew==='function'){salesNew()}else{navigate('sales')}">+ ${a('طلب جديد','New')}</button>` : ''}
+      ${canEdit('sales') ? `<button class="btn btn-p btn-sm" onclick="if(typeof salesNew==='function'){salesNew()}else{navigate('sales')}">+ ${a('طلب جديد','New')}</button>` : ''}
     </div>
     <div class="card-bd" style="padding:0">
       ${recent.length ? `<div class="tw"><table>
@@ -2198,7 +2201,7 @@ function dashSales(){
           const stLabel = (typeof salesStatusLabel==='function') ? salesStatusLabel(r.status) : r.status;
           const cn = (typeof salesClientName==='function') ? salesClientName(r) : (r.clientName||'');
           const tp = (typeof insTypeLabel==='function') ? insTypeLabel(r.insType) : r.insType;
-          return `<tr style="cursor:pointer" onclick="if(typeof salesOpen==='function'){salesOpen(${r.id})}else{navigate('sales')}">
+          return `<tr style="cursor:pointer" onclick="if(typeof salesOpen==='function'){salesOpen('${r.id}')}else{navigate('sales')}">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12px">${r.ref}</span></td>
             <td style="font-weight:600">${cn||'—'}</td>
             <td style="font-size:12.5px">${tp}</td>
@@ -2248,7 +2251,7 @@ function dashOps(){
           const stLabel = (typeof opsStatusLabel==='function') ? opsStatusLabel(r.opsStatus||'inbox') : '';
           const cn = (typeof salesClientName==='function') ? salesClientName(r) : (r.clientName||'');
           const tp = (typeof insTypeLabel==='function') ? insTypeLabel(r.insType) : r.insType;
-          return `<tr style="cursor:pointer" onclick="if(typeof opsOpen==='function'){opsOpen(${r.id})}else{navigate('operations')}">
+          return `<tr style="cursor:pointer" onclick="if(typeof opsOpen==='function'){opsOpen('${r.id}')}else{navigate('operations')}">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12px">${r.ref}</span></td>
             <td style="font-weight:600">${cn||'—'}</td>
             <td style="font-size:12.5px">${tp}</td>
@@ -2372,7 +2375,7 @@ function salesListPage(){
   ${heading(a('المبيعات','Sales'), a('إدارة طلبات التأمين وإرسالها للأوبريشن','Manage insurance requests'))}
   ${followUps ? `<div class="sl-followup-bar"><span class="sl-followup-dot">●</span> ${followUps} ${a('عرض أُرسل للعميل ويحتاج متابعة','quote(s) sent to client — need follow-up')}</div>` : ''}
   <div class="cc-toolbar">
-    ${isMgr()||curUser ? `<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>` : ''}
+    ${canEdit('sales') ? `<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>` : ''}
     <div class="srch-wr cc-search">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input type="text" id="sl-q" placeholder="${a('بحث في الطلبات...', 'Search requests...')}" oninput="renderSalesList()"/>
@@ -2642,7 +2645,7 @@ function renderSalesList(){
         ${list.map(r => {
           const st = salesStatus(r.status);
           const clientName = salesClientName(r);
-          return `<tr style="cursor:pointer" onclick="salesOpen(${r.id})">
+          return `<tr style="cursor:pointer" onclick="salesOpen('${r.id}')">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span>${(r.status==='sent'&&r.opsStatus==='sent_client')?` <span class="sl-followup-dot" title="${a('العرض أُرسل للعميل — يحتاج متابعة','Quote sent — follow up')}">●</span>`:''}</td>
             ${C.client?`<td style="font-weight:600">${clientName || '<span style="color:var(--text3)">'+a('بدون عميل','No client')+'</span>'}</td>`:''}
             ${C.size?`<td style="font-size:12.5px">${compSizeLabel(r.compSize)||'—'}</td>`:''}
@@ -2669,7 +2672,7 @@ function renderSalesTbody(){
   tbody.innerHTML = list.length ? list.map(r => {
     const st = salesStatus(r.status);
     const clientName = salesClientName(r);
-    return `<tr style="cursor:pointer" onclick="salesOpen(${r.id})">
+    return `<tr style="cursor:pointer" onclick="salesOpen('${r.id}')">
       <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span>${(r.status==='sent'&&r.opsStatus==='sent_client')?` <span class="sl-followup-dot" title="${a('العرض أُرسل للعميل — يحتاج متابعة','Quote sent — follow up')}">●</span>`:''}</td>
       ${C.client?`<td style="font-weight:600">${clientName || '<span style="color:var(--text3)">'+a('بدون عميل','No client')+'</span>'}</td>`:''}
       ${C.size?`<td style="font-size:12.5px">${compSizeLabel(r.compSize)||'—'}</td>`:''}
@@ -2723,7 +2726,7 @@ function renderSalesCards(list){
     const st = salesStatus(r.status);
     const clientName = salesClientName(r);
     return `
-    <div class="cc-card" onclick="salesOpen(${r.id})">
+    <div class="cc-card" onclick="salesOpen('${r.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <span style="font-family:'Inter',sans-serif;font-weight:800;color:var(--blue);font-size:14px">${r.ref}</span>
         ${badge(st.cls, salesStatusLabel(r.status))}
@@ -2778,7 +2781,7 @@ function salesViewSheet(){
         <button class="btn btn-o btn-sm" onclick="salesReturnToOps()">↩ ${a('إرجاع للتعديل','Return')}</button>
         <button class="btn btn-p btn-sm" onclick="salesApproveQuote()">✓ ${a('اعتماد العرض','Approve')}</button>
       ` : ''}
-      ${isMgr() ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
+      ${canEdit('sales') ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
     </div>
   </div>
 
@@ -3841,7 +3844,7 @@ function renderOpsTable(list){
         ${list.map(r => {
           const st = opsStatus(r.opsStatus||'inbox');
           const qCount = (r.quotes||[]).length;
-          return `<tr style="cursor:pointer" onclick="opsOpen(${r.id})">
+          return `<tr style="cursor:pointer" onclick="opsOpen('${r.id}')">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span></td>
             ${C.client?`<td style="font-weight:600">${salesClientName(r) || '—'}</td>`:''}
             ${C.size?`<td style="font-size:12.5px">${compSizeLabel(r.compSize)||'—'}</td>`:''}
@@ -3864,7 +3867,7 @@ function renderOpsCards(list){
     const st = opsStatus(r.opsStatus||'inbox');
     const qCount = (r.quotes||[]).length;
     return `
-    <div class="cc-card" onclick="opsOpen(${r.id})">
+    <div class="cc-card" onclick="opsOpen('${r.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <span style="font-family:'Inter',sans-serif;font-weight:800;color:var(--blue);font-size:14px">${r.ref}</span>
         ${badge(st.cls, opsStatusLabel(r.opsStatus||'inbox'))}
@@ -4013,7 +4016,7 @@ function opsTabContent(r, c){
       ${r.followUp ? salesVRow(a('تاريخ متابعة','Follow-up'), r.followUp, 'ltr') : ''}
       ${r.deadline ? salesVRow(a('تاريخ مطلوب','Required By'), r.deadline, 'ltr') : ''}
     </div>
-    ${isMgr() ? `
+    ${canEdit('operations') ? `
     <div style="margin-top:18px;padding:14px 16px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">${a('تكليف الطلب','Assign Request')}</div>
       <div class="field-row" style="padding:0;border:none">
@@ -4579,7 +4582,7 @@ function ccListPage(){
   return `
   ${heading(t('contacts'), a('دفتر العناوين الموحّد لكل الجهات', 'Unified address book'))}
   <div class="cc-toolbar">
-    ${isMgr() ? `<button class="btn btn-p cc-new-btn" onclick="ccNew()">+ ${a('جديد', 'New')}</button>` : ''}
+    ${canEdit('contacts') ? `<button class="btn btn-p cc-new-btn" onclick="ccNew()">+ ${a('جديد', 'New')}</button>` : ''}
     <div class="srch-wr cc-search">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input type="text" id="ct-q" placeholder="${a('بحث...', 'Search...')}" oninput="renderCC()"/>
@@ -4713,7 +4716,7 @@ function renderCCCards(list){
     const ty = ctType(c.cat);
     const sCls = ccStatusClass(c.status);
     return `
-    <div class="cc-card" onclick="ccOpen(${c.id})">
+    <div class="cc-card" onclick="ccOpen('${c.id}')">
       <div style="display:flex;gap:11px;align-items:flex-start;margin-bottom:11px">
         <div class="cc-av" style="background:${ty.color}">${c.name.charAt(0)}</div>
         <div style="flex:1;min-width:0">
@@ -4797,7 +4800,7 @@ function renderCCList(list){
         ${list.map(c => {
           const ty = ctType(c.cat);
           const sCls = ccStatusClass(c.status);
-          return `<tr style="cursor:pointer" onclick="ccOpen(${c.id})">
+          return `<tr style="cursor:pointer" onclick="ccOpen('${c.id}')">
             <td><div style="display:flex;align-items:center;gap:9px"><div class="cc-av" style="background:${ty.color};width:28px;height:28px;font-size:11px;border-radius:7px">${c.name.charAt(0)}</div><span style="font-weight:600">${c.name}</span></div></td>
             ${C.category?`<td><span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text2)"><span style="width:7px;height:7px;border-radius:50%;background:${ty.color};display:inline-block"></span>${lang==='ar'?ty.ar:ty.en}</span></td>`:''}
             ${C.person?`<td style="font-size:12.5px">${c.person || '—'}</td>`:''}
@@ -4837,7 +4840,7 @@ function ccViewSheet(){
         ${a('رجوع', 'Back')}
       </button>
     </div>
-    ${isMgr() ? `<div class="sheet-bar-r">
+    ${canEdit('contacts') ? `<div class="sheet-bar-r">
       <button class="btn btn-p btn-sm" onclick="ccEdit()">${t('edit')}</button>
       <button class="btn btn-danger btn-sm" onclick="ccDelete()">${t('del')}</button>
     </div>` : ''}
@@ -5668,7 +5671,7 @@ function finCoaPage(){
   ${heading(a('شجرة الحسابات','Chart of Accounts'), a('الدليل المحاسبي للشركة','Company Account Directory'))}
 
   <div class="cc-toolbar">
-    ${isMgr()?`<button class="btn btn-p btn-sm" onclick="coaOpenForm(null)" style="flex-shrink:0">
+    \${canEdit('finance')?`<button class="btn btn-p btn-sm" onclick="coaOpenForm(null)" style="flex-shrink:0">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       ${a('حساب جديد','New Account')}
     </button>`:''}
@@ -5801,7 +5804,7 @@ function finCoaPage(){
           ${coaCols.desc?`<th class="cc-th" style="width:180px">${a('الوصف','Description')}</th>`:''}
           ${coaCols.balance?`<th class="cc-th" style="width:110px;text-align:end">${a('الرصيد','Balance')}</th>`:''}
           ${coaCols.partner?`<th class="cc-th" style="width:120px">${a('بارتنر','Partner')}</th>`:''}
-          ${isMgr()?`<th style="width:60px"></th>`:''}
+          ${canEdit('finance')?`<th style="width:60px"></th>`:''}
 
           <!-- منتقي الأعمدة — آخر عمود على اليمين -->
           <th style="width:36px;position:relative;text-align:center;padding:0">
@@ -5871,7 +5874,7 @@ function coaRenderCards(){
           <code style="font-size:11px;font-weight:700;color:var(--text3);font-family:'Inter',monospace;display:block;margin-bottom:3px">${ac.code}</code>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${lang==='ar'?ac.name:(ac.nameEn||ac.name)}</div>
         </div>
-        ${isMgr()?`<div style="display:flex;gap:2px;flex-shrink:0">
+        ${canEdit('finance')?`<div style="display:flex;gap:2px;flex-shrink:0">
           <button onclick="coaOpenForm('${ac.id}')" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:5px;border-radius:5px"
             onmouseover="this.style.color='var(--blue)';this.style.background='var(--blue-lt)'"
             onmouseout="this.style.color='var(--text3)';this.style.background='transparent'">
@@ -5930,7 +5933,7 @@ function coaAccRow(acc){
     ${coaCols.desc?`<td style="padding:10px 14px;font-size:12px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${acc.desc||'—'}</td>`:''}
     ${coaCols.balance?`<td style="padding:10px 14px;text-align:end;font-family:'Inter',monospace;font-size:12px;color:var(--text3)">0.00</td>`:''}
     ${coaCols.partner?`<td style="padding:10px 14px;font-size:12.5px;color:var(--text2)">${acc.partner||'—'}</td>`:''}
-    ${isMgr()?`<td style="padding:5px 6px;text-align:center" onclick="event.stopPropagation()">
+    ${canEdit('finance')?`<td style="padding:5px 6px;text-align:center" onclick="event.stopPropagation()">
       <div class="coa-acts" style="display:flex;gap:2px;justify-content:center;opacity:0;transition:.15s">
         <button onclick="coaOpenForm('${acc.id}')" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:5px;border-radius:5px"
           onmouseover="this.style.color='var(--blue)';this.style.background='var(--blue-lt)'"
@@ -6303,7 +6306,6 @@ function jnlNextRef(){
 }
 function jnlTotals(lines){ return lines.reduce((t,l)=>({d:t.d+(+l.debit||0),c:t.c+(+l.credit||0)}),{d:0,c:0}); }
 function jnlContactName(id){ if(!id) return '—'; const c=contacts.find(x=>x.id==id); return c?c.name:'—'; }
-function fmtMoney(n){ return n?Number(n).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'0.00'; }
 
 /* ════════════════════════
    LIST PAGE
@@ -6327,7 +6329,7 @@ function finJnlPage(){
   ${heading(a('القيود اليومية','Journal Entries'), a('سجل القيود المحاسبية','Accounting Journal'))}
 
   <div class="cc-toolbar">
-    ${isMgr()?`<button class="btn btn-p btn-sm" onclick="jnlOpenForm(null)" style="flex-shrink:0">
+    ${canEdit('finance')?`<button class="btn btn-p btn-sm" onclick="jnlOpenForm(null)" style="flex-shrink:0">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       ${a('قيد جديد','New Entry')}
     </button>`:''}
@@ -6474,7 +6476,7 @@ function finJnlPage(){
             <span class="col-resizer" onmousedown="colResizeStart(event)"></span>
           </th>
 
-          ${isMgr()?`<th style="width:60px"></th>`:''}
+          ${canEdit('finance')?`<th style="width:60px"></th>`:''}
 
           <!-- منتقي الأعمدة — نفس نمط شجرة الحسابات -->
           <th style="width:36px;position:relative;text-align:center;padding:0">
@@ -6525,7 +6527,7 @@ function finJnlPage(){
             <td style="padding:8px 14px">
               <span style="font-size:11px;padding:3px 10px;border-radius:99px;font-weight:600;background:${st.color}18;color:${st.color}">${lang==='ar'?st.ar:st.en}</span>
             </td>
-            ${isMgr()?`<td style="padding:5px 6px;text-align:center" onclick="event.stopPropagation()">
+            ${canEdit('finance')?`<td style="padding:5px 6px;text-align:center" onclick="event.stopPropagation()">
               <button onclick="jnlDelete('${j.id}')" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:5px;border-radius:5px"
                 onmouseover="this.style.color='var(--danger)';this.style.background='#fee2e2'"
                 onmouseout="this.style.color='var(--text3)';this.style.background='transparent'">
@@ -9943,22 +9945,19 @@ const ALL_PAGES = [
 
 /* الصلاحية الافتراضية بناءً على الـ dept */
 function defaultPages(u){
-  if(u.role==='superadmin') return ALL_PAGES.map(p=>p.id);
+  const lvl = {};
+  if(u.role==='superadmin' || u.dept==='all'){
+    ALL_PAGES.forEach(p => lvl[p.id] = 'edit');
+    return lvl;
+  }
+  ALL_PAGES.forEach(p => lvl[p.id] = 'none');
+  lvl.dashboard = 'edit';
   const deptPage = {finance:'finance',sales:'sales',operations:'operations',customers:'customers',contacts:'contacts'};
-  const base = ['dashboard'];
-  if(deptPage[u.dept]) base.push(deptPage[u.dept]);
-  if(u.role==='manager') base.push('settings');
-  return base;
+  if(deptPage[u.dept]) lvl[deptPage[u.dept]] = 'edit';
+  if(u.role==='manager') lvl.settings = 'edit';
+  return lvl;
 }
 
-/* ── canAccess تستخدم قائمة الصلاحيات ── */
-function canAccess(page){
-  if(!curUser) return false;
-  if(curUser.role==='superadmin') return true;
-  const pages = curUser.pages || defaultPages(curUser);
-  return pages.includes(page);
-}
-function isMgr(){ return curUser && (curUser.role==='superadmin'||curUser.role==='manager'); }
 
 /* ── حالة الإعدادات ── */
 let stTab = 'company';
@@ -10300,11 +10299,12 @@ function deleteUser(){
 /* ════════════════ 3) الصلاحيات — Access Matrix ═══ */
 function stAccess(){
   const nonAdmin = users.filter(u=>u.role!=='superadmin');
+  const lvlLabel = l => l==='edit' ? a('تعديل','Edit') : l==='view' ? a('عرض','View') : a('بدون','None');
   return `
   <div style="max-width:980px">
     <div style="margin-bottom:18px">
       <h3 style="font-size:15px;font-weight:700;color:var(--text);margin:0 0 4px">${a('مصفوفة الصلاحيات','Access Matrix')}</h3>
-      <p style="font-size:12px;color:var(--text2);margin:0">${a('حدد الصفحات المسموح لكل مستخدم الوصول إليها. مديرو النظام يملكون وصولاً كاملاً دائماً.','Define which pages each user can access. Super Admins always have full access.')}</p>
+      <p style="font-size:12px;color:var(--text2);margin:0">${a('بدون = مخفي، عرض = يشوف بدون تعديل، تعديل = صلاحية كاملة.','None = hidden, View = read-only, Edit = full access.')}</p>
     </div>
     <div class="card" style="padding:0;overflow:auto">
       <table style="width:100%;border-collapse:collapse;min-width:700px">
@@ -10312,7 +10312,7 @@ function stAccess(){
           <tr style="background:var(--bg)">
             <th style="padding:12px 18px;text-align:start;font-size:12px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border);min-width:180px">${a('المستخدم','User')}</th>
             ${ALL_PAGES.map(p=>`
-            <th style="padding:10px 6px;text-align:center;font-size:10.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border);min-width:68px">
+            <th style="padding:10px 6px;text-align:center;font-size:10.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border);min-width:90px">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto 3px">${p.icon}</svg>
               ${lang==='ar'?p.ar:p.en}
             </th>`).join('')}
@@ -10320,7 +10320,7 @@ function stAccess(){
         </thead>
         <tbody>
           ${nonAdmin.map(u=>{
-            const pages = u.pages || defaultPages(u);
+            const pages = (!u.pages||Array.isArray(u.pages)) ? defaultPages(u) : u.pages;
             return `
             <tr style="border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
               <td style="padding:12px 18px">
@@ -10328,11 +10328,14 @@ function stAccess(){
                 <div style="font-size:11px;color:var(--text3)" dir="ltr">${u.user}</div>
               </td>
               ${ALL_PAGES.map(p=>{
-                const has = pages.includes(p.id);
-                return `<td style="text-align:center;padding:10px 6px">
-                  <div onclick="stTogglePage(${u.id},'${p.id}',this)" style="width:22px;height:22px;border-radius:6px;border:2px solid ${has?'var(--blue)':'var(--border)'};background:${has?'var(--blue)':'transparent'};display:flex;align-items:center;justify-content:center;cursor:pointer;margin:auto;transition:all .13s">
-                    ${has?`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`:''}
-                  </div>
+                const cur = pages[p.id]||'none';
+                return `<td style="text-align:center;padding:8px 4px">
+                  <select onchange="stSetPageLevel('${u.id}','${p.id}',this.value)"
+                    style="font-size:11px;padding:3px 4px;border-radius:6px;border:1.5px solid ${cur==='edit'?'var(--blue)':cur==='view'?'var(--green)':'var(--border)'};background:${cur==='edit'?'var(--blue-lt)':cur==='view'?'var(--green-lt)':'var(--bg)'};color:var(--text);cursor:pointer">
+                    <option value="none" ${cur==='none'?'selected':''}>${a('بدون','None')}</option>
+                    <option value="view" ${cur==='view'?'selected':''}>${a('عرض','View')}</option>
+                    <option value="edit" ${cur==='edit'?'selected':''}>${a('تعديل','Edit')}</option>
+                  </select>
                 </td>`;
               }).join('')}
             </tr>`;
@@ -10348,19 +10351,13 @@ function stAccess(){
   </div>`;
 }
 
-function stTogglePage(userId, pageId, el){
+function stSetPageLevel(userId, pageId, level){
   const u = users.find(x=>x.id===userId);
   if(!u) return;
-  if(!u.pages) u.pages = defaultPages(u);
-  const has = u.pages.includes(pageId);
-  if(has){
-    u.pages = u.pages.filter(p=>p!==pageId);
-    el.style.background='transparent'; el.style.borderColor='var(--border)'; el.innerHTML='';
-  } else {
-    u.pages.push(pageId);
-    el.style.background='var(--blue)'; el.style.borderColor='var(--blue)';
-    el.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
-  }
+  if(!u.pages || Array.isArray(u.pages)) u.pages = defaultPages(u);
+  u.pages[pageId] = level;
+  sb.from('profiles').update({pages: u.pages}).eq('id', u.id);
+  if(curUser && curUser.id === userId) curUser.pages = u.pages;
   buildSidebar();
 }
 
@@ -10554,7 +10551,7 @@ function pgHR(){
   <div class="card">
     <div class="card-hd">
       <span class="card-tt">${a('قائمة الموظفين','Employees')}</span>
-      ${isMgr() ? `<button class="btn btn-p btn-sm" onclick="hrAddModal()">+ ${a('موظف جديد','New Employee')}</button>` : ''}
+      ${canEdit('hr') ? `<button class="btn btn-p btn-sm" onclick="hrAddModal()">+ ${a('موظف جديد','New Employee')}</button>` : ''}
     </div>
     <div class="card-bd" style="padding:14px">
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
@@ -10571,7 +10568,7 @@ function pgHR(){
           <th>${a('الراتب','Salary')}</th>
           <th>${a('العمولة %','Commission %')}</th>
           <th>${a('الحالة','Status')}</th>
-          ${isMgr()?`<th></th>`:''}
+          ${canEdit('hr')?`<th></th>`:''}
         </tr></thead>
         <tbody id="hrTbody"></tbody>
       </table></div>
@@ -10605,7 +10602,7 @@ function renderHRTable(){
       <td dir="ltr" style="font-family:'Inter',sans-serif;font-weight:600">${e.salary.toLocaleString()} ${a('ر.س','SAR')}</td>
       <td style="text-align:center">${e.commission>0?`<span class="badge bg-green">${e.commission}%</span>`:'—'}</td>
       <td><span class="badge ${e.status==='active'?'bg-green':'bg-gray'}">${e.status==='active'?a('نشط','Active'):a('غير نشط','Inactive')}</span></td>
-      ${isMgr()?`<td><button class="btn btn-o btn-sm" onclick="hrEditModal(${e.id})">${a('تعديل','Edit')}</button></td>`:''}
+      ${canEdit('hr')?`<td><button class="btn btn-o btn-sm" onclick="hrEditModal(${e.id})">${a('تعديل','Edit')}</button></td>`:''}
     </tr>`).join('');
 }
 
