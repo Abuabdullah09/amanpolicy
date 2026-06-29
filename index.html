@@ -1874,6 +1874,24 @@ function canEdit(page){ return pageLevel(page) === 'edit'; }
 function isMgr(){
   return curUser && (curUser.role === 'superadmin' || curUser.role === 'manager');
 }
+function isSalesMgr(){ return curUser && curUser.role==='manager' && curUser.dept==='sales'; }
+function isSalesEmp(){ return curUser && curUser.role==='employee' && curUser.dept==='sales'; }
+function isOpsMgr(){   return curUser && curUser.role==='manager' && curUser.dept==='operations'; }
+function isOpsEmp(){   return curUser && curUser.role==='employee' && curUser.dept==='operations'; }
+
+/* هل يقدر المستخدم الحالي يعدّل على طلب مبيعات معيّن؟ */
+function salesUserCanEdit(r){
+  if(!curUser) return false;
+  if(curUser.role==='superadmin') return true;
+  if(isSalesMgr()) return false;
+  if(isSalesEmp()) return !r || r.assignedTo === curUser.user;
+  return false;
+}
+
+/* هل يقدر المستخدم الحالي يُسند طلبات في العمليات؟ */
+function opsUserCanAssign(){
+  return curUser && (curUser.role==='superadmin' || isOpsMgr());
+}
 
 
 /* ===== hub.js ===== */
@@ -2192,7 +2210,7 @@ function dashSales(){
   <div class="card" style="margin-top:18px">
     <div class="card-hd" style="display:flex;justify-content:space-between;align-items:center">
       <span class="card-tt">${a('آخر الطلبات','Recent Requests')}</span>
-      ${canEdit('sales') ? `<button class="btn btn-p btn-sm" onclick="if(typeof salesNew==='function'){salesNew()}else{navigate('sales')}">+ ${a('طلب جديد','New')}</button>` : ''}
+      ${salesUserCanEdit(null) ? `<button class="btn btn-p btn-sm" onclick="if(typeof salesNew==='function'){salesNew()}else{navigate('sales')}">+ ${a('طلب جديد','New')}</button>` : ''}
     </div>
     <div class="card-bd" style="padding:0">
       ${recent.length ? `<div class="tw"><table>
@@ -2377,7 +2395,7 @@ function salesListPage(){
   ${heading(a('المبيعات','Sales'), a('إدارة طلبات التأمين وإرسالها للأوبريشن','Manage insurance requests'))}
   ${followUps ? `<div class="sl-followup-bar"><span class="sl-followup-dot">●</span> ${followUps} ${a('عرض أُرسل للعميل ويحتاج متابعة','quote(s) sent to client — need follow-up')}</div>` : ''}
   <div class="cc-toolbar">
-    ${canEdit('sales') ? `<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>` : ''}
+    ${salesUserCanEdit(null) ? `<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>` : ''}
     <div class="srch-wr cc-search">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input type="text" id="sl-q" placeholder="${a('بحث في الطلبات...', 'Search requests...')}" oninput="renderSalesList()"/>
@@ -2530,6 +2548,7 @@ document.addEventListener('click', e => {
 function salesFiltered(){
   const q = (document.getElementById('sl-q')?.value || '').toLowerCase().trim();
   return requests.filter(r => {
+    if(isSalesEmp() && r.assignedTo !== curUser.user) return false;
     if(salesFilter !== 'all' && r.status !== salesFilter) return false;
     if(salesTypeFilter !== 'all' && r.insType !== salesTypeFilter) return false;
     if(salesClientFilter){ const cn=(salesClientName(r)||'').toLowerCase(); if(!cn.includes(salesClientFilter.toLowerCase())) return false; }
@@ -2775,7 +2794,7 @@ function salesViewSheet(){
       </button>
     </div>
     <div class="sheet-bar-r">
-      ${r.status !== 'sent' ? `<button class="btn btn-o btn-sm" onclick="salesEdit()">${t('edit')}</button>` : ''}
+      ${(r.status !== 'sent' && salesUserCanEdit(r)) ? `<button class="btn btn-o btn-sm" onclick="salesEdit()">${t('edit')}</button>` : ''}
       ${r.status === 'draft' ? `<button class="btn btn-o btn-sm" onclick="salesMarkReady()">✓ ${a('تأكيد / مكتمل','Mark as Ready')}</button>` : ''}
       ${r.status === 'ready' ? `<button class="btn btn-p btn-sm" onclick="salesSendToOps()">${a('إرسال للأوبريشن','Send to Operations')} →</button>` : ''}
       ${(r.status === 'sent' && (!r.opsStatus || r.opsStatus === 'inbox')) ? `<button class="btn btn-o btn-sm" onclick="salesRecall()">↩ ${a('استرجاع','Recall')}</button>` : ''}
@@ -2783,7 +2802,7 @@ function salesViewSheet(){
         <button class="btn btn-o btn-sm" onclick="salesReturnToOps()">↩ ${a('إرجاع للتعديل','Return')}</button>
         <button class="btn btn-p btn-sm" onclick="salesApproveQuote()">✓ ${a('اعتماد العرض','Approve')}</button>
       ` : ''}
-      ${canEdit('sales') ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
+      ${salesUserCanEdit(r) ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
     </div>
   </div>
 
@@ -3612,6 +3631,8 @@ function slsMarkInstPaid(reqId, instIdx){
    AMAN POLICY ERP — OPERATIONS
    ════════════════════════════════════════════════ */
 let opsMode = 'list', opsCurrentId = null, opsTab = 'info', opsFilter = 'all', opsView = 'cards';
+let opsShowUnassigned = false;
+function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
 let opsCols = {client:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
 
 function pgOps(){
@@ -3621,7 +3642,12 @@ function pgOps(){
 function initOps(){ if(opsMode === 'list') renderOpsList(); }
 
 /* الطلبات الواردة للأوبريشن = المرسلة من المبيعات (status === 'sent') */
-function opsRequests(){ return requests.filter(r => r.status === 'sent'); }
+function opsRequests(){
+  const all = requests.filter(r => r.status === 'sent');
+  if(!curUser || curUser.role==='superadmin' || isOpsMgr()) return all;
+  if(isOpsEmp()) return all.filter(r => r.handledBy === curUser.user);
+  return all;
+}
 
 /* ════════════════════════════════════════
    1) قائمة الطلبات الواردة
@@ -3635,6 +3661,10 @@ function opsListPage(){
       <input type="text" id="op-q" placeholder="${a('بحث في الطلبات...', 'Search requests...')}" oninput="renderOpsList()"/>
     </div>
     <div id="ops-status-bar-wrap">${opsStatusBarHTML()}</div>
+    ${opsUserCanAssign() ? `<button onclick="opsToggleUnassigned()" id="ops-unassigned-btn"
+      style="font-size:11.5px;padding:4px 10px;border-radius:20px;border:1.5px solid ${opsShowUnassigned?'var(--blue)':'var(--border)'};background:${opsShowUnassigned?'var(--blue-lt)':'transparent'};color:${opsShowUnassigned?'var(--blue)':'var(--text2)'};cursor:pointer;white-space:nowrap;transition:all .13s">
+      ⚠ ${a('غير موزّعة','Unassigned')} <span style="font-weight:700">(${requests.filter(r=>r.status==='sent'&&!r.handledBy).length})</span>
+    </button>` : ''}
     <div style="margin-inline-start:auto;display:flex;gap:1px;align-self:center">
       <button onclick="opsSetView('cards')" title="${a('بطاقات','Cards')}"
         style="width:26px;height:24px;border:none;background:transparent;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:${opsView==='cards'?'var(--blue)':'var(--text3)'};transition:color .13s"
@@ -3759,6 +3789,7 @@ document.addEventListener('click', e => {
 function opsFiltered(){
   const q = (document.getElementById('op-q')?.value || '').toLowerCase().trim();
   return opsRequests().filter(r => {
+    if(opsShowUnassigned && r.handledBy) return false;
     const os = r.opsStatus || 'inbox';
     if(opsFilter !== 'all' && os !== opsFilter) return false;
     if(opsTypeFilter !== 'all' && r.insType !== opsTypeFilter) return false;
@@ -4018,7 +4049,7 @@ function opsTabContent(r, c){
       ${r.followUp ? salesVRow(a('تاريخ متابعة','Follow-up'), r.followUp, 'ltr') : ''}
       ${r.deadline ? salesVRow(a('تاريخ مطلوب','Required By'), r.deadline, 'ltr') : ''}
     </div>
-    ${canEdit('operations') ? `
+    ${opsUserCanAssign() ? `
     <div style="margin-top:18px;padding:14px 16px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">${a('تكليف الطلب','Assign Request')}</div>
       <div class="field-row" style="padding:0;border:none">
