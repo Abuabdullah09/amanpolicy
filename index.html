@@ -1277,7 +1277,7 @@ async function sbInsert(table, data){
   const payload = {...data}; delete payload.id;
   const {data:row, error} = await sb.from(table).insert({data:payload}).select('id').single();
   if(error){ console.error('sbInsert', table, error); throw error; }
-  return {...data, id:row.id};
+  return {...data, id:String(row.id)};
 }
 function sbUpdate(table, id, fullObj){
   const payload = {...fullObj}; delete payload.id;
@@ -1811,7 +1811,7 @@ async function doLogout(){
 async function loadAllData(){
   try {
     const {data:pRows} = await sb.from('profiles').select('*');
-    users = (pRows||[]).map(p=>({id:p.id, name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
+    users = (pRows||[]).map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
   } catch(e){ console.warn('profiles load failed', e); }
 
   try {
@@ -1820,9 +1820,9 @@ async function loadAllData(){
       sb.from('requests').select('*').order('id'),
       sb.from('employees').select('*').order('id'),
     ]);
-    contacts  = (cRows ||[]).map(r=>({...r.data,  id:r.id}));
-    requests  = (rRows ||[]).map(r=>({...r.data,  id:r.id}));
-    employees = (eRows ||[]).map(r=>({...r.data,  id:r.id}));
+    contacts  = (cRows ||[]).map(r=>({...r.data,  id:String(r.id)}));
+    requests  = (rRows ||[]).map(r=>({...r.data,  id:String(r.id)}));
+    employees = (eRows ||[]).map(r=>({...r.data,  id:String(r.id)}));
   } catch(e){ console.warn('data load failed', e); }
   const maxRef = requests.reduce((m,r)=>{ const n=(r.ref||'').match(/REQ-\d+-(\d+)/); return n?Math.max(m,+n[1]):m; },0);
   reqCounter = maxRef + 1;
@@ -1831,7 +1831,7 @@ async function loadAllData(){
 async function afterLogin(user){
   // superadmin كـ fallback دائم — نحدّثه من الـ profile لو موجود
   curUser = {
-    id: user.id, name: user.email, nEn: user.email,
+    id: String(user.id), name: user.email, nEn: user.email,
     user: user.email, role: 'superadmin', dept: 'all',
   };
   try {
@@ -2010,6 +2010,8 @@ function enterDept(page){
 function goHub(){
   curPage = 'hub';
   document.getElementById('tbTitle').textContent = a('الرئيسية', 'Hub');
+  const tb = document.getElementById('tbActions');
+  if(tb) tb.innerHTML = '';
   buildSidebar();
   document.getElementById('appContent').innerHTML = renderHub();
 }
@@ -2748,7 +2750,7 @@ function salesClientName(r){
 }
 
 /* ════════════════ التنقل ════════════════ */
-function salesOpen(id){ salesCurrentId = +id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
+function salesOpen(id){ salesCurrentId = id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
 function salesNew(){ salesCurrentId = null; salesMode = 'edit'; salesTmpDocs = []; salesPickedContact = null; salesEditTab = 'notes'; salesTmpNotes = null; salesTmpInsurers = []; navigate('sales'); }
 function salesEdit(){ salesMode = 'edit'; const r = requests.find(x=>x.id===salesCurrentId); salesTmpDocs = r&&r.docs?[...r.docs]:[]; salesPickedContact = r?r.contactId:null; salesEditTab = 'notes'; salesTmpNotes = r?(r.notes||null):null; salesTmpInsurers = r&&r.insurers?[...r.insurers]:[]; navigate('sales'); }
 function salesBackList(){ salesMode = 'list'; salesNavTab = 'list'; salesCurrentId = null; navigate('sales'); }
@@ -3903,7 +3905,7 @@ function opsInitResize(){
 }
 
 /* ════════════════ التنقل ════════════════ */
-function opsOpen(id){ opsCurrentId = +id; opsMode = 'view'; opsTab = 'info'; navigate('operations'); }
+function opsOpen(id){ opsCurrentId = id; opsMode = 'view'; opsTab = 'info'; navigate('operations'); }
 function opsBackList(){ opsMode = 'list'; opsCurrentId = null; navigate('operations'); }
 
 /* تكليف موظف عمليات — يظهر فقط للمدير في مرحلة inbox */
@@ -4817,7 +4819,7 @@ function renderCCList(list){
 }
 
 /* ════════════════ التنقل بين الأوضاع ════════════════ */
-function ccOpen(id){ ccCurrentId = +id; ccMode = 'view'; ccTab = 'info'; navigate('contacts'); }
+function ccOpen(id){ ccCurrentId = id; ccMode = 'view'; ccTab = 'info'; navigate('contacts'); }
 
 function ccNew(){ ccCurrentId = null; ccMode = 'edit'; ccKind = 'company'; ccEditTab = 'notes'; ccTmpNotes = null; ccExtraPeople = []; ccEditCat = 'client'; ccAddrDocs = []; ccCrDocs = []; ccLockCat = false; ccPrefillName = ''; ccReturnTo = null; ccOnSaved = null; navigate('contacts'); }
 function ccEdit(){ ccMode = 'edit'; const c = contacts.find(x=>x.id===ccCurrentId); ccKind = (c&&c.kind)||'company'; ccEditTab = 'notes'; ccTmpNotes = (c&&c.notes)||null; ccExtraPeople = (c&&c.extraPeople)?JSON.parse(JSON.stringify(c.extraPeople)):[]; ccEditCat = (c&&c.cat)||'client'; ccAddrDocs = (c&&c.addrDocs)?[...c.addrDocs]:[]; ccCrDocs = (c&&c.crDocs)?[...c.crDocs]:[]; ccLockCat = false; ccReturnTo = null; ccOnSaved = null; navigate('contacts'); }
@@ -10265,7 +10267,7 @@ async function addUser(){
   stTab='users'; navigate('settings');
 }
 function stOpenEditUser(id){
-  const u=users.find(x=>String(x.id)===String(id)); if(!u) return;
+  const u=users.find(x=>x.id===id); if(!u) return;
   editingUserId=id;
   const ttEl=document.getElementById('eu-tt'); if(ttEl) ttEl.textContent=a('تعديل:','Edit:')+' '+(lang==='ar'?u.name:u.nEn);
   const inEl=document.getElementById('eu-info'); if(inEl) inEl.textContent=(lang==='ar'?u.name:u.nEn)+' · '+u.user;
@@ -10276,7 +10278,7 @@ function stOpenEditUser(id){
 }
 function openEditUser(id){ stOpenEditUser(id); }
 function saveEditUser(){
-  const u=users.find(x=>String(x.id)===String(editingUserId)); if(!u) return;
+  const u=users.find(x=>x.id===editingUserId); if(!u) return;
   const np=document.getElementById('eu-pass').value.trim();
   const np2=document.getElementById('eu-pass2').value.trim();
   if(np&&np!==np2){ alert(a('كلمتا المرور غير متطابقتين','Passwords do not match')); return; }
@@ -10291,7 +10293,7 @@ function saveEditUser(){
 }
 function deleteUser(){
   if(!confirm(a('حذف هذا المستخدم نهائياً؟','Delete this user permanently?'))) return;
-  users=users.filter(x=>String(x.id)!==String(editingUserId));
+  users=users.filter(x=>x.id!==editingUserId);
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
@@ -10352,12 +10354,12 @@ function stAccess(){
 }
 
 function stSetPageLevel(userId, pageId, level){
-  const u = users.find(x=>String(x.id)===String(userId));
+  const u = users.find(x=>x.id===userId);
   if(!u) return;
   if(!u.pages || Array.isArray(u.pages)) u.pages = defaultPages(u);
   u.pages[pageId] = level;
   sb.from('profiles').update({pages: u.pages}).eq('id', u.id);
-  if(curUser && String(curUser.id) === String(userId)) curUser.pages = u.pages;
+  if(curUser && curUser.id === userId) curUser.pages = u.pages;
   buildSidebar();
 }
 
