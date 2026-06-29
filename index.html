@@ -2748,7 +2748,7 @@ function salesClientName(r){
 }
 
 /* ════════════════ التنقل ════════════════ */
-function salesOpen(id){ salesCurrentId = id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
+function salesOpen(id){ salesCurrentId = +id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
 function salesNew(){ salesCurrentId = null; salesMode = 'edit'; salesTmpDocs = []; salesPickedContact = null; salesEditTab = 'notes'; salesTmpNotes = null; salesTmpInsurers = []; navigate('sales'); }
 function salesEdit(){ salesMode = 'edit'; const r = requests.find(x=>x.id===salesCurrentId); salesTmpDocs = r&&r.docs?[...r.docs]:[]; salesPickedContact = r?r.contactId:null; salesEditTab = 'notes'; salesTmpNotes = r?(r.notes||null):null; salesTmpInsurers = r&&r.insurers?[...r.insurers]:[]; navigate('sales'); }
 function salesBackList(){ salesMode = 'list'; salesNavTab = 'list'; salesCurrentId = null; navigate('sales'); }
@@ -3903,7 +3903,7 @@ function opsInitResize(){
 }
 
 /* ════════════════ التنقل ════════════════ */
-function opsOpen(id){ opsCurrentId = id; opsMode = 'view'; opsTab = 'info'; navigate('operations'); }
+function opsOpen(id){ opsCurrentId = +id; opsMode = 'view'; opsTab = 'info'; navigate('operations'); }
 function opsBackList(){ opsMode = 'list'; opsCurrentId = null; navigate('operations'); }
 
 /* تكليف موظف عمليات — يظهر فقط للمدير في مرحلة inbox */
@@ -4817,7 +4817,7 @@ function renderCCList(list){
 }
 
 /* ════════════════ التنقل بين الأوضاع ════════════════ */
-function ccOpen(id){ ccCurrentId = id; ccMode = 'view'; ccTab = 'info'; navigate('contacts'); }
+function ccOpen(id){ ccCurrentId = +id; ccMode = 'view'; ccTab = 'info'; navigate('contacts'); }
 
 function ccNew(){ ccCurrentId = null; ccMode = 'edit'; ccKind = 'company'; ccEditTab = 'notes'; ccTmpNotes = null; ccExtraPeople = []; ccEditCat = 'client'; ccAddrDocs = []; ccCrDocs = []; ccLockCat = false; ccPrefillName = ''; ccReturnTo = null; ccOnSaved = null; navigate('contacts'); }
 function ccEdit(){ ccMode = 'edit'; const c = contacts.find(x=>x.id===ccCurrentId); ccKind = (c&&c.kind)||'company'; ccEditTab = 'notes'; ccTmpNotes = (c&&c.notes)||null; ccExtraPeople = (c&&c.extraPeople)?JSON.parse(JSON.stringify(c.extraPeople)):[]; ccEditCat = (c&&c.cat)||'client'; ccAddrDocs = (c&&c.addrDocs)?[...c.addrDocs]:[]; ccCrDocs = (c&&c.crDocs)?[...c.crDocs]:[]; ccLockCat = false; ccReturnTo = null; ccOnSaved = null; navigate('contacts'); }
@@ -10265,7 +10265,7 @@ async function addUser(){
   stTab='users'; navigate('settings');
 }
 function stOpenEditUser(id){
-  const u=users.find(x=>x.id===id); if(!u) return;
+  const u=users.find(x=>String(x.id)===String(id)); if(!u) return;
   editingUserId=id;
   const ttEl=document.getElementById('eu-tt'); if(ttEl) ttEl.textContent=a('تعديل:','Edit:')+' '+(lang==='ar'?u.name:u.nEn);
   const inEl=document.getElementById('eu-info'); if(inEl) inEl.textContent=(lang==='ar'?u.name:u.nEn)+' · '+u.user;
@@ -10276,7 +10276,7 @@ function stOpenEditUser(id){
 }
 function openEditUser(id){ stOpenEditUser(id); }
 function saveEditUser(){
-  const u=users.find(x=>x.id===editingUserId); if(!u) return;
+  const u=users.find(x=>String(x.id)===String(editingUserId)); if(!u) return;
   const np=document.getElementById('eu-pass').value.trim();
   const np2=document.getElementById('eu-pass2').value.trim();
   if(np&&np!==np2){ alert(a('كلمتا المرور غير متطابقتين','Passwords do not match')); return; }
@@ -10291,7 +10291,7 @@ function saveEditUser(){
 }
 function deleteUser(){
   if(!confirm(a('حذف هذا المستخدم نهائياً؟','Delete this user permanently?'))) return;
-  users=users.filter(x=>x.id!==editingUserId);
+  users=users.filter(x=>String(x.id)!==String(editingUserId));
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
@@ -10352,12 +10352,12 @@ function stAccess(){
 }
 
 function stSetPageLevel(userId, pageId, level){
-  const u = users.find(x=>x.id===userId);
+  const u = users.find(x=>String(x.id)===String(userId));
   if(!u) return;
   if(!u.pages || Array.isArray(u.pages)) u.pages = defaultPages(u);
   u.pages[pageId] = level;
   sb.from('profiles').update({pages: u.pages}).eq('id', u.id);
-  if(curUser && curUser.id === userId) curUser.pages = u.pages;
+  if(curUser && String(curUser.id) === String(userId)) curUser.pages = u.pages;
   buildSidebar();
 }
 
