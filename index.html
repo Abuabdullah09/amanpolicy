@@ -1425,8 +1425,11 @@ function salesStatusLabel(id){ const s = salesStatus(id); return lang==='ar'?s.a
 // حالات الأوبريشن (تكمّل حالات المبيعات)
 const OPS_STATUSES = [
   // المرحلة الأولى: عرض السعر
-  {id:'inbox',       ar:'وارد',            en:'Inbox',          color:'#b8740f', cls:'bg-yellow', phase:'quotation'},
-  {id:'pricing',     ar:'قيد التسعير',     en:'Pricing',        color:'#1e4d8c', cls:'bg-blue',   phase:'quotation'},
+  {id:'inbox',             ar:'وارد',               en:'Inbox',              color:'#b8740f', cls:'bg-yellow', phase:'quotation'},
+  {id:'received_assigned', ar:'وارد ومُكلَّف',       en:'Received & Assigned',color:'#2563eb', cls:'bg-blue',   phase:'quotation'},
+  {id:'processing',        ar:'قيد المعالجة',        en:'Processing',         color:'#7c3aed', cls:'bg-purple', phase:'quotation'},
+  {id:'quote_ready',       ar:'التسعيرة جاهزة',      en:'Quote Ready',        color:'#0891b2', cls:'bg-teal',   phase:'quotation'},
+  {id:'pricing',           ar:'قيد التسعير',         en:'Pricing',            color:'#1e4d8c', cls:'bg-blue',   phase:'quotation'},
   {id:'sent_client', ar:'أُرسل للعميل',    en:'Sent to Client', color:'#6b46a8', cls:'bg-purple', phase:'quotation'},
   {id:'approved',    ar:'معتمد',           en:'Approved',       color:'#0e7490', cls:'bg-teal',   phase:'quotation'},
   // المرحلة الثانية: التنفيذ
@@ -2860,6 +2863,28 @@ function salesTabContent(r, c){
       ${salesVRow(a('تاريخ متابعة','Follow-up Date'), r.followUp||'—', 'ltr')}
       ${salesVRow(a('تاريخ مطلوب','Required By'), r.deadline||'—', 'ltr')}
     </div>
+    ${r.status === 'sent' ? (() => {
+      const ops = opsStatus(r.opsStatus||'inbox');
+      const handler = r.handledBy ? users.find(u=>u.user===r.handledBy) : null;
+      const handlerName = handler ? (lang==='ar'?handler.name:handler.nEn) : null;
+      const recentHistory = (r.history||[]).slice().reverse().slice(0,6);
+      return `
+      <div style="margin-top:16px;padding:14px 16px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">${a('متابعة الأوبريشن','Operations Tracking')}</div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:${recentHistory.length?'12':'0'}px">
+          ${badge(ops.cls, opsStatusLabel(r.opsStatus||'inbox'))}
+          ${handlerName
+            ? `<span style="font-size:12.5px;color:var(--text2)">${a('تتم المعالجة بواسطة:','Handled by:')} <b style="color:var(--text)">${handlerName}</b></span>`
+            : `<span style="font-size:12.5px;font-weight:600;color:#b8740f">${a('بانتظار الإسناد','Awaiting Assignment')}</span>`}
+        </div>
+        ${recentHistory.length ? `<div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px">
+          ${recentHistory.map(h=>`<div style="display:flex;gap:8px;font-size:11.5px;color:var(--text2)">
+            <span style="min-width:100px;color:var(--text3);white-space:nowrap">${h.at}</span>
+            <span><b style="color:var(--text)">${h.by}</b> · ${h.from} → ${h.to}${h.note?` (${h.note})`:''}</span>
+          </div>`).join('')}
+        </div>` : ''}
+      </div>`;
+    })() : ''}
     ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المرغوبة','Preferred Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>x.id===id);return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
     ${r.notes ? `<div style="margin-top:18px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:6px">${a('ملاحظات','Notes')}</div><div style="font-size:13.5px;color:var(--text);line-height:1.7;white-space:pre-wrap">${r.notes}</div></div>` : ''}`;
   }
@@ -3859,6 +3884,7 @@ function renderOpsTable(list){
               </label>`).join('')}
             </div>
           </th>`:''}
+          ${opsUserCanAssign() ? `<th class="cc-th" style="min-width:130px"><span>${a('إسناد','Assign')}</span></th>` : ''}
           <th style="width:36px;position:relative;text-align:center;padding:0">
             <button onclick="opToggleColPickerDD(event)" title="${a('الأعمدة','Columns')}"
               style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:6px;border-radius:5px;display:flex;align-items:center;justify-content:center;width:100%;height:100%"
@@ -3886,6 +3912,23 @@ function renderOpsTable(list){
             ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
             ${C.quotes?`<td style="font-size:12.5px">${qCount > 0 ? qCount+' '+a('عرض','quotes') : '<span style="color:var(--text3)">'+a('لا يوجد','none')+'</span>'}</td>`:''}
             ${C.status?`<td>${badge(st.cls, opsStatusLabel(r.opsStatus||'inbox'))}</td>`:''}
+            ${opsUserCanAssign() ? `<td onclick="event.stopPropagation()" style="padding:4px 8px">
+              <div style="display:flex;align-items:center;gap:6px">
+                <select id="ops-assign-sel-${r.id}"
+                  onmouseover="this.style.borderBottomColor='var(--border)'"
+                  onmouseout="this.style.borderBottomColor='transparent'"
+                  onfocus="this.style.borderBottomColor='var(--blue)'"
+                  onblur="this.style.borderBottomColor='transparent'"
+                  style="font-family:var(--font);font-size:12px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s;max-width:130px">
+                  <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
+                  ${users.filter(u=>u.dept==='operations'||u.dept==='all').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+                </select>
+                <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
+                  class="btn btn-p btn-sm" style="padding:3px 8px;font-size:11px;white-space:nowrap">
+                  ${a('إسناد','Assign')}
+                </button>
+              </div>
+            </td>` : ''}
             <td></td>
           </tr>`;
         }).join('')}
@@ -3911,6 +3954,23 @@ function renderOpsCards(list){
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
         ${qCount} ${a('عرض سعر','quotes')}
       </div>
+      ${opsUserCanAssign() ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)" onclick="event.stopPropagation()">
+        <div style="display:flex;align-items:center;gap:6px">
+          <select id="ops-assign-sel-${r.id}"
+            onmouseover="this.style.borderBottomColor='var(--border)'"
+            onmouseout="this.style.borderBottomColor='transparent'"
+            onfocus="this.style.borderBottomColor='var(--blue)'"
+            onblur="this.style.borderBottomColor='transparent'"
+            style="flex:1;font-family:var(--font);font-size:12px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s">
+            <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
+            ${users.filter(u=>u.dept==='operations'||u.dept==='all').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+          </select>
+          <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
+            class="btn btn-p btn-sm" style="padding:4px 10px;font-size:11.5px;white-space:nowrap">
+            ${a('إسناد','Assign')}
+          </button>
+        </div>
+      </div>` : ''}
     </div>`;
   }).join('') + `</div>`;
 }
@@ -3944,11 +4004,32 @@ function opsAssignHandler(userVal){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
   r.handledBy = userVal || null;
+  if(userVal && (r.opsStatus === 'inbox' || !r.opsStatus)){
+    addHistory(r, a('وارد','Inbox'), a('وارد ومُكلَّف','Received & Assigned'));
+    r.opsStatus = 'received_assigned';
+  } else if(!userVal && r.opsStatus === 'received_assigned'){
+    addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('وارد','Inbox'));
+    r.opsStatus = 'inbox';
+  }
   sbSyncReq(opsCurrentId);
-  const u = userVal ? users.find(x => x.user === userVal) : null;
-  const name = u ? (lang==='ar'?u.name:u.nEn) : a('—','—');
   const lbl = document.querySelector('#ops-handleby-sel');
   if(lbl) lbl.style.borderBottomColor = userVal ? 'var(--success)' : 'var(--border)';
+}
+
+/* إسناد سريع من القائمة — بدون فتح الطلب */
+function opsAssignFromList(requestId, userVal){
+  const r = requests.find(x => x.id === requestId);
+  if(!r) return;
+  r.handledBy = userVal || null;
+  if(userVal && (r.opsStatus === 'inbox' || !r.opsStatus)){
+    addHistory(r, a('وارد','Inbox'), a('وارد ومُكلَّف','Received & Assigned'));
+    r.opsStatus = 'received_assigned';
+  } else if(!userVal && r.opsStatus === 'received_assigned'){
+    addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('وارد','Inbox'));
+    r.opsStatus = 'inbox';
+  }
+  sbSyncReq(requestId);
+  renderOpsList();
 }
 
 /* ════════════════════════════════════════
@@ -3969,13 +4050,20 @@ function opsViewSheet(){
       </button>
     </div>
     <div class="sheet-bar-r">
-      ${(r.opsStatus||'inbox')==='inbox' ? `<button class="btn btn-p btn-sm" onclick="opsStartPricing()">${a('بدء التسعير','Start Pricing')}</button>` : ''}
-      ${(r.opsStatus||'inbox')==='inbox' || (r.opsStatus)==='pricing' ? `<button class="btn btn-danger btn-sm" onclick="opsRejectRequest()">✕ ${a('رفض','Reject')}</button>` : ''}
-      ${(r.opsStatus)==='pricing' && (r.quotes||[]).length ? `<button class="btn btn-p btn-sm" onclick="opsSendToClient()">${a('إرسال العرض للعميل','Send to Client')} →</button>` : ''}
-      ${(r.opsStatus)==='sent_client' ? `<span class="ops-wait-badge">${a('بانتظار رد المبيعات','Awaiting sales')}</span>` : ''}
-      ${(r.opsStatus)==='approved' ? `<button class="btn btn-p btn-sm" onclick="opsStartExecution()">${a('بدء التنفيذ','Start Execution')}</button>` : ''}
-      ${(r.opsStatus)==='executing' ? `<button class="btn btn-p btn-sm" onclick="opsIssuePolicy()">${a('إصدار الوثيقة','Issue Policy')}</button>` : ''}
-      ${(r.opsStatus)==='issued' ? `<button class="btn btn-p btn-sm" onclick="opsSendToSales()">${a('إرسال للمبيعات ✓','Send to Sales ✓')}</button>` : ''}
+      ${(() => {
+        const isHandler = curUser && (curUser.role==='superadmin' || isOpsMgr() || (isOpsEmp() && r.handledBy === curUser.user));
+        const earlyStatuses = ['inbox','received_assigned','processing','quote_ready'];
+        return `
+        ${earlyStatuses.includes(r.opsStatus||'inbox') || (r.opsStatus||'inbox')==='quote_ready' ? `<button class="btn btn-p btn-sm" onclick="opsStartPricing()">${a('بدء التسعير','Start Pricing')}</button>` : ''}
+        ${earlyStatuses.includes(r.opsStatus||'inbox') || (r.opsStatus)==='pricing' ? `<button class="btn btn-danger btn-sm" onclick="opsRejectRequest()">✕ ${a('رفض','Reject')}</button>` : ''}
+        ${r.opsStatus==='received_assigned' && isHandler ? `<button class="btn btn-p btn-sm" onclick="opsConfirmReceipt()">${a('تأكيد الاستلام ✓','Confirm Receipt ✓')}</button>` : ''}
+        ${r.opsStatus==='processing' && isHandler ? `<button class="btn btn-p btn-sm" onclick="opsMarkQuoteReady()">${a('التسعيرة جاهزة ✓','Quote Ready ✓')}</button>` : ''}
+        ${(r.opsStatus)==='pricing' && (r.quotes||[]).length ? `<button class="btn btn-p btn-sm" onclick="opsSendToClient()">${a('إرسال العرض للعميل','Send to Client')} →</button>` : ''}
+        ${(r.opsStatus)==='sent_client' ? `<span class="ops-wait-badge">${a('بانتظار رد المبيعات','Awaiting sales')}</span>` : ''}
+        ${(r.opsStatus)==='approved' ? `<button class="btn btn-p btn-sm" onclick="opsStartExecution()">${a('بدء التنفيذ','Start Execution')}</button>` : ''}
+        ${(r.opsStatus)==='executing' ? `<button class="btn btn-p btn-sm" onclick="opsIssuePolicy()">${a('إصدار الوثيقة','Issue Policy')}</button>` : ''}
+        ${(r.opsStatus)==='issued' ? `<button class="btn btn-p btn-sm" onclick="opsSendToSales()">${a('إرسال للمبيعات ✓','Send to Sales ✓')}</button>` : ''}`;
+      })()}
     </div>
   </div>
 
@@ -4330,10 +4418,26 @@ function opsRemoveQuote(i){
 }
 
 /* ════════════════ تغيير الحالة ════════════════ */
+function opsConfirmReceipt(){
+  const r = requests.find(x => x.id === opsCurrentId);
+  if(!r) return;
+  addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('قيد المعالجة','Processing'));
+  r.opsStatus = 'processing';
+  sbSyncReq(opsCurrentId);
+  navigate('operations');
+}
+function opsMarkQuoteReady(){
+  const r = requests.find(x => x.id === opsCurrentId);
+  if(!r) return;
+  addHistory(r, a('قيد المعالجة','Processing'), a('التسعيرة جاهزة','Quote Ready'));
+  r.opsStatus = 'quote_ready';
+  sbSyncReq(opsCurrentId);
+  navigate('operations');
+}
 function opsStartPricing(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
-  addHistory(r, a('وارد','Inbox'), a('قيد التسعير','Pricing'));
+  addHistory(r, opsStatusLabel(r.opsStatus||'inbox'), a('قيد التسعير','Pricing'));
   r.opsStatus = 'pricing';
   sbSyncReq(opsCurrentId);
   navigate('operations');
