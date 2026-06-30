@@ -952,7 +952,7 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
     <div class="m-bd">
       <div class="fg-grid">
         <div class="fg full"><label class="flabel">Reference</label><input class="fi" id="nr-ref" dir="ltr" readonly style="opacity:.6"/></div>
-        <div class="fg full"><label class="flabel">Client Name</label><input class="fi" id="nr-client" placeholder="Client name"/></div>
+        <div class="fg full"><label class="flabel">Client Name</label><select class="fs" id="reqClientSelect"><option value="">-- اختر عميل --</option></select></div>
         <div class="fg"><label class="flabel">Insurance Type</label>
           <select class="fs" id="nr-type" dir="ltr">
             <option>طبي</option><option>مركبات</option><option>ممتلكات</option>
@@ -1483,7 +1483,12 @@ function addNotif(targetUser, text, type){
   };
   notifications.push(n);
   localStorage.setItem('erp_notifs', JSON.stringify(notifications));
-  if(curUser && curUser.user === targetUser) updateNotifBadge();
+  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).then(({error}) => { if(error) console.warn('notif insert failed', error.message); });
+  if(curUser && curUser.user === targetUser){
+    updateNotifBadge();
+    const panel = document.getElementById('notif-panel');
+    if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
+  }
 }
 
 function myNotifs(){
@@ -1536,6 +1541,23 @@ function toggleNotifPanel(e){
   if(rect.right - pw >= 8){ panel.style.left = (rect.right - pw) + 'px'; panel.style.right = 'auto'; }
   else { panel.style.right = '8px'; panel.style.left = 'auto'; }
   panel.style.display = 'block';
+}
+
+function subscribeNotifs(){
+  if(!curUser) return;
+  sb.channel('erp-notifs-' + curUser.user)
+    .on('postgres_changes', {event:'INSERT', schema:'public', table:'notifications', filter:'to_user=eq.' + curUser.user}, (payload) => {
+      const r = payload.new;
+      if(!r || !r.to_user) return;
+      if(notifications.some(n => String(n.id) === String(r.id))) return;
+      const n = {id: r.id, to: r.to_user, text: r.text, type: r.type||'info', at: r.at||new Date().toLocaleString(lang==='ar'?'ar-SA':'en-US',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'}), read: false};
+      notifications.push(n);
+      localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+      updateNotifBadge();
+      const panel = document.getElementById('notif-panel');
+      if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
+    })
+    .subscribe();
 }
 
 document.addEventListener('click', e => {
@@ -1925,11 +1947,11 @@ async function loadAllData(){
     const {data:pRows} = await sb.from('profiles').select('*');
     if(pRows && pRows.length){
       users = pRows.map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
-      localStorage.setItem('erp_users', JSON.stringify(users));
+      localStorage.setItem('aman_users', JSON.stringify(users));
     }
   } catch(e){
     console.warn('profiles load failed', e);
-    try { const _uc=JSON.parse(localStorage.getItem('erp_users')||'null'); if(_uc&&_uc.length) users=_uc; } catch(ee){}
+    try { const _uc=JSON.parse(localStorage.getItem('aman_users')||localStorage.getItem('erp_users')||'null'); if(_uc&&_uc.length) users=_uc; } catch(ee){}
   }
 
   try {
@@ -1956,7 +1978,7 @@ async function afterLogin(user){
     const {data:p} = await sb.from('profiles').select('*').eq('id',user.id).single();
     if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.role=p.role||'superadmin'; curUser.dept=p.dept||'all'; curUser.pages=p.pages||null; }
   } catch(e){ console.warn('profile load failed', e); }
-  try { const _sc=JSON.parse(localStorage.getItem('erp_curUser')||'null'); if(_sc&&_sc.id===String(user.id)){ if(_sc.name) curUser.name=_sc.name; if(_sc.nEn) curUser.nEn=_sc.nEn; if(_sc.user) curUser.user=_sc.user; if(_sc.dept) curUser.dept=_sc.dept; if(_sc.role) curUser.role=_sc.role; if(_sc.pages!==undefined) curUser.pages=_sc.pages; } } catch(e){}
+  try { const _sc=JSON.parse(localStorage.getItem('aman_current_user')||localStorage.getItem('erp_curUser')||'null'); if(_sc&&_sc.id===String(user.id)){ if(_sc.name) curUser.name=_sc.name; if(_sc.nEn) curUser.nEn=_sc.nEn; if(_sc.user) curUser.user=_sc.user; if(_sc.dept) curUser.dept=_sc.dept; if(_sc.role) curUser.role=_sc.role; if(_sc.pages!==undefined) curUser.pages=_sc.pages; } } catch(e){}
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
   const _cuIdx = users.findIndex(u => u.id === curUser.id);
   if(_cuIdx >= 0){ users[_cuIdx].name=curUser.name; users[_cuIdx].nEn=curUser.nEn; users[_cuIdx].user=curUser.user; users[_cuIdx].dept=curUser.dept; users[_cuIdx].role=curUser.role; if(curUser.pages!==undefined) users[_cuIdx].pages=curUser.pages; }
@@ -1965,6 +1987,17 @@ async function afterLogin(user){
   const _savedPage = localStorage.getItem('aman_curPage');
   if(_savedPage && _savedPage !== 'hub' && canAccess(_savedPage)) navigate(_savedPage);
   else goHub();
+  try {
+    const {data:nRows} = await sb.from('notifications').select('*').eq('to_user', curUser.user).order('id', {ascending:false}).limit(50);
+    if(nRows && nRows.length){
+      const sbIds = new Set(nRows.map(r => String(r.id)));
+      notifications = notifications.filter(n => !sbIds.has(String(n.id)));
+      const mapped = nRows.map(r => ({id: r.id, to: r.to_user, text: r.text, type: r.type||'info', at: r.at||'', read: r.read||false}));
+      notifications = [...mapped, ...notifications];
+      localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+    }
+  } catch(e){ console.warn('notifs load failed', e); }
+  subscribeNotifs();
   updateNotifBadge();
 }
 
@@ -2903,6 +2936,44 @@ function salesClientName(r){
 /* ════════════════ التنقل ════════════════ */
 function salesOpen(id){ salesCurrentId = id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
 function salesNew(){ salesCurrentId = null; salesMode = 'edit'; salesTmpDocs = []; salesPickedContact = null; salesEditTab = 'notes'; salesTmpNotes = null; salesTmpInsurers = []; navigate('sales'); }
+
+function openNrModal(){
+  const refEl = document.getElementById('nr-ref');
+  if(refEl) refEl.value = nextReqRef();
+  const sel = document.getElementById('reqClientSelect');
+  if(sel){
+    const clients = contacts.filter(c => c.cat === 'client' || c.cat === 'company');
+    sel.innerHTML = `<option value="">${a('-- اختر عميل --','-- Select client --')}</option>` +
+      clients.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+  }
+  openM('nrModal');
+}
+
+async function saveNewReq(){
+  const sel = document.getElementById('reqClientSelect');
+  const clientId = sel ? sel.value : '';
+  const clientName = (sel && sel.selectedIndex > 0) ? sel.options[sel.selectedIndex].text : '';
+  if(!clientName){ alert(a('يرجى اختيار العميل','Please select a client')); return; }
+  const ref = (document.getElementById('nr-ref')||{}).value || nextReqRef();
+  const type = (document.getElementById('nr-type')||{}).value || '';
+  const priority = (document.getElementById('nr-priority')||{}).value || 'normal';
+  const insValue = Number((document.getElementById('nr-value')||{}).value || 0);
+  const notes = ((document.getElementById('nr-notes')||{}).value || '').trim();
+  const now = new Date().toLocaleDateString(lang === 'ar' ? 'ar-SA' : 'en-US');
+  const newReq = {
+    ref, contactId: clientId ? String(clientId) : null, clientName,
+    type, priority, insValue, status: 'new',
+    assignedTo: curUser ? curUser.user : '',
+    date: now, notes, docs: []
+  };
+  try {
+    const saved = await sbInsert('requests', newReq);
+    requests.push(saved);
+    closeM('nrModal');
+    ['nr-value','nr-notes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+    navigate('sales');
+  } catch(e){ alert(a('فشل حفظ الطلب: ','Failed to save request: ') + e.message); }
+}
 function salesEdit(){ salesMode = 'edit'; const r = requests.find(x=>x.id===salesCurrentId); salesTmpDocs = r&&r.docs?[...r.docs]:[]; salesPickedContact = r&&r.contactId ? String(r.contactId) : null; salesEditTab = 'notes'; salesTmpNotes = r?(r.notes||null):null; salesTmpInsurers = r&&r.insurers?[...r.insurers]:[]; navigate('sales'); }
 function salesBackList(){ salesMode = 'list'; salesNavTab = 'list'; salesCurrentId = null; navigate('sales'); }
 function salesBackView(){ salesMode = 'view'; navigate('sales'); }
@@ -10644,21 +10715,21 @@ async function saveEditUser(){
   if(np) u.pass=np;
   u.dept=document.getElementById('eu-dept').value;
   u.role=document.getElementById('eu-role').value;
-  localStorage.setItem('erp_users', JSON.stringify(users));
+  localStorage.setItem('aman_users', JSON.stringify(users));
   if(curUser && editingUserId === curUser.id){
     curUser.name = u.name; curUser.nEn = u.nEn;
     curUser.user = u.user; curUser.dept = u.dept; curUser.role = u.role;
-    localStorage.setItem('erp_curUser', JSON.stringify(curUser));
+    localStorage.setItem('aman_current_user', JSON.stringify(curUser));
     refreshCurUserUI();
   }
-  const {error} = await sb.from('profiles').update({name:u.name, name_en:u.nEn, username:u.user, dept:u.dept, role:u.role}).eq('id', Number(u.id));
+  const {error} = await sb.from('profiles').update({name:u.name, name_en:u.nEn, username:u.user, dept:u.dept, role:u.role}).eq('id', u.id);
   if(error) console.warn(a('تحذير — فشل حفظ البيانات على السيرفر: ','Warning — server save failed: ') + error.message);
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
 async function deleteUser(){
   if(!confirm(a('حذف هذا المستخدم نهائياً؟','Delete this user permanently?'))) return;
-  const {error} = await sb.from('profiles').delete().eq('id', Number(editingUserId));
+  const {error} = await sb.from('profiles').delete().eq('id', editingUserId);
   if(error){ alert(a('فشل الحذف: ','Delete failed: ') + error.message); return; }
   users=users.filter(x=>x.id!==editingUserId);
   closeM('euModal');
@@ -10725,7 +10796,7 @@ function stSetPageLevel(userId, pageId, level){
   if(!u) return;
   if(!u.pages || Array.isArray(u.pages)) u.pages = defaultPages(u);
   u.pages[pageId] = level;
-  sb.from('profiles').update({pages: u.pages}).eq('id', Number(u.id));
+  sb.from('profiles').update({pages: u.pages}).eq('id', u.id);
   if(curUser && curUser.id === userId) curUser.pages = u.pages;
   buildSidebar();
 }
