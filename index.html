@@ -623,6 +623,8 @@ svg{stroke-linecap:round;stroke-linejoin:round;}
 .field-row:hover input,.field-row:hover select{border-bottom-color:var(--border)!important;}
 .field-row input:focus,.field-row select:focus{border-bottom-color:var(--blue)!important;}
 .field-row select{cursor:pointer;}
+/* محاذاة التواريخ في وضع RTL: تحديد dir="ltr" تمنع انحراف النصوص نحو التسمية */
+html[dir="rtl"] .field-row span[dir="ltr"]{ text-align: left; }
 /* حقول بنود القيد — نفس سلوك جهات الاتصال */
 .jnl-inp{border:none;border-bottom:1px solid transparent;background:transparent;font-family:var(--font);font-size:12.5px;color:var(--text);padding:5px 2px;outline:none;transition:border-color .15s;width:100%;}
 .jnl-inp::placeholder{color:#b0b6c0;}
@@ -886,7 +888,7 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
       <div class="l-err" id="loginErr"></div>
       <div class="l-field">
         <label class="l-label" id="l-ul">EMAIL</label>
-        <input class="l-input" id="loginU" type="email" autocomplete="email" placeholder="Enter your email"/>
+        <input class="l-input" id="loginU" type="text" autocomplete="username" placeholder="Enter your email or username"/>
       </div>
       <div class="l-field">
         <label class="l-label" id="l-pl">PASSWORD</label>
@@ -919,9 +921,9 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
       <button class="ib" onclick="toggleDark()" title="Dark mode">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       </button>
-      <button class="ib" title="Notifications">
+      <button class="ib" id="notifBtn" onclick="toggleNotifPanel(event)" title="Notifications">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        <span class="ndot"></span>
+        <span class="ndot" style="display:none"></span>
       </button>
       <button class="ib" id="logoutBtn" onclick="doLogout()" title="تسجيل الخروج">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
@@ -1462,6 +1464,86 @@ const OPS_STATUSES = [
 ];
 // الحالة التي تخص مين (للتنبيهات): سُمح بالمتابعة للمبيعات
 function opsStatusOwner(id){ return (id === 'sent_client' || id === 'quote_ready') ? 'sales' : 'operations'; }
+
+/* ════════════════════════════════════════
+   نظام الإشعارات — Notification System
+   ════════════════════════════════════════ */
+let notifications = JSON.parse(localStorage.getItem('erp_notifs') || '[]');
+
+function addNotif(targetUser, text, type){
+  if(!targetUser) return;
+  type = type || 'info';
+  const n = {
+    id: Date.now() + Math.random(),
+    to: targetUser,
+    text: text,
+    type: type,
+    at: new Date().toLocaleString(lang === 'ar' ? 'ar-SA' : 'en-US', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}),
+    read: false
+  };
+  notifications.push(n);
+  localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  if(curUser && curUser.user === targetUser) updateNotifBadge();
+}
+
+function myNotifs(){
+  return curUser ? notifications.filter(n => n.to === curUser.user).sort((a,b) => b.id - a.id) : [];
+}
+
+function updateNotifBadge(){
+  const dot = document.querySelector('#notifBtn .ndot');
+  if(dot) dot.style.display = myNotifs().some(n => !n.read) ? 'block' : 'none';
+}
+
+function markNotifsRead(){
+  if(!curUser) return;
+  notifications.forEach(n => { if(n.to === curUser.user) n.read = true; });
+  localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  const panel = document.getElementById('notif-panel');
+  if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
+  updateNotifBadge();
+}
+
+function notifPanelHTML(){
+  const list = myNotifs();
+  const unread = list.filter(n => !n.read);
+  const typeIcon = t => t === 'success' ? '✓' : t === 'warning' ? '⚠' : t === 'error' ? '✕' : '●';
+  const typeColor = t => t === 'success' ? '#1e7a52' : t === 'warning' ? '#b8740f' : t === 'error' ? '#ef4444' : 'var(--blue)';
+  return `
+  <div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <span style="font-size:13px;font-weight:700;color:var(--text)">${a('الإشعارات','Notifications')}${unread.length ? ` <span style="font-size:11px;font-weight:600;background:var(--blue);color:#fff;border-radius:20px;padding:1px 6px">${unread.length}</span>` : ''}</span>
+    ${unread.length ? `<button onclick="markNotifsRead()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;white-space:nowrap;padding:2px 0">${a('تحديد كمقروء','Mark all read')}</button>` : ''}
+  </div>
+  ${list.length ? list.slice(0,30).map(n => `
+  <div style="padding:10px 14px;border-bottom:1px solid var(--border);background:${n.read ? 'transparent' : 'var(--bg)'};display:flex;gap:10px;align-items:flex-start">
+    <span style="margin-top:2px;font-size:12px;color:${typeColor(n.type)};flex-shrink:0">${typeIcon(n.type)}</span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12.5px;color:var(--text);line-height:1.5">${n.text}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px">${n.at}</div>
+    </div>
+  </div>`).join('') : `<div style="padding:28px 16px;text-align:center;font-size:13px;color:var(--text3)">${a('لا توجد إشعارات','No notifications yet')}</div>`}`;
+}
+
+function toggleNotifPanel(e){
+  e.stopPropagation();
+  const panel = document.getElementById('notif-panel');
+  if(!panel) return;
+  if(panel.style.display === 'block'){ panel.style.display = 'none'; return; }
+  panel.innerHTML = notifPanelHTML();
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pw = 300;
+  panel.style.top = (rect.bottom + 6) + 'px';
+  if(rect.right - pw >= 8){ panel.style.left = (rect.right - pw) + 'px'; panel.style.right = 'auto'; }
+  else { panel.style.right = '8px'; panel.style.left = 'auto'; }
+  panel.style.display = 'block';
+}
+
+document.addEventListener('click', e => {
+  const panel = document.getElementById('notif-panel');
+  if(panel && panel.style.display === 'block' && !e.target.closest('#notif-panel') && !e.target.closest('#notifBtn')){
+    panel.style.display = 'none';
+  }
+});
 function opsStatus(id){ return OPS_STATUSES.find(s => s.id === id) || OPS_STATUSES[0]; }
 function opsStatusLabel(id){ const s = opsStatus(id); return lang==='ar'?s.ar:s.en; }
 
@@ -1721,13 +1803,13 @@ function applyLang(){
   if(lsub) lsub.textContent = lang === 'ar' ? 'سجّل دخولك إلى النظام' : 'Sign in to your workspace';
 
   const lul = document.getElementById('l-ul');
-  if(lul) lul.textContent = lang === 'ar' ? 'البريد الإلكتروني' : 'EMAIL';
+  if(lul) lul.textContent = lang === 'ar' ? 'البريد أو اسم المستخدم' : 'EMAIL / USERNAME';
 
   const lpl = document.getElementById('l-pl');
   if(lpl) lpl.textContent = lang === 'ar' ? 'كلمة المرور' : 'PASSWORD';
 
   const lu = document.getElementById('loginU');
-  if(lu) lu.placeholder = lang === 'ar' ? 'أدخل بريدك الإلكتروني' : 'Enter your email';
+  if(lu) lu.placeholder = lang === 'ar' ? 'البريد الإلكتروني أو اسم المستخدم' : 'Email or username';
 
   const lp = document.getElementById('loginP');
   if(lp) lp.placeholder = lang === 'ar' ? 'أدخل كلمة المرور' : 'Enter your password';
@@ -1864,12 +1946,14 @@ async function afterLogin(user){
     const {data:p} = await sb.from('profiles').select('*').eq('id',user.id).single();
     if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.role=p.role||'superadmin'; curUser.dept=p.dept||'all'; curUser.pages=p.pages||null; }
   } catch(e){ console.warn('profile load failed', e); }
+  try { const _sc=JSON.parse(localStorage.getItem('erp_curUser')||'null'); if(_sc&&_sc.id===String(user.id)){ if(_sc.name) curUser.name=_sc.name; if(_sc.nEn) curUser.nEn=_sc.nEn; if(_sc.user) curUser.user=_sc.user; if(_sc.dept) curUser.dept=_sc.dept; if(_sc.role) curUser.role=_sc.role; if(_sc.pages!==undefined) curUser.pages=_sc.pages; } } catch(e){}
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appShell').classList.add('visible');
   const _savedPage = localStorage.getItem('aman_curPage');
   if(_savedPage && _savedPage !== 'hub' && canAccess(_savedPage)) navigate(_savedPage);
   else goHub();
+  updateNotifBadge();
 }
 
 async function initApp(){
@@ -2089,6 +2173,15 @@ function buildSidebar(){
   const avEl = document.getElementById('tbAv');
   if(avEl) avEl.textContent = curUser.nEn.charAt(0).toUpperCase();
   updateTbUserState();
+}
+
+function refreshCurUserUI(){
+  if(!curUser) return;
+  const nameEl = document.getElementById('tbUname');
+  if(nameEl) nameEl.textContent = lang==='ar' ? curUser.name : curUser.nEn;
+  const avEl = document.getElementById('tbAv');
+  if(avEl) avEl.textContent = (curUser.name||'?').charAt(0).toUpperCase();
+  updateNotifBadge();
 }
 
 function updateTbUserState(){
@@ -2360,7 +2453,7 @@ const SALES_TABS = [
 ];
 let salesView = 'list';   // list | cards
 // الأعمدة الظاهرة في القائمة (المستخدم يتحكم من الفلتر)
-let salesCols = {client:true, size:false, type:true, classification:false, tier:false, kind:false, status:true, date:true};
+let salesCols = {client:true, size:false, type:true, classification:false, tier:false, kind:false, status:true, date:true, opsEmp:true};
 let salesEditTab = 'notes';   // notes | docs (في صفحة الإدخال)
 let salesTmpNotes = null;
 let salesTmpInsurers = [];   // شركات التأمين المختارة (متعدد)
@@ -2659,6 +2752,7 @@ function renderSalesList(){
               </label>`).join('')}
             </div>
           </th>`:''}
+          ${C.opsEmp?`<th class="cc-th" style="position:relative"><span>${a('موظف الأوبريشن','Ops Officer')}</span><span class="cc-resize"></span></th>`:''}
           ${C.date?`<th class="cc-th" style="position:relative">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('التاريخ','Date')}</span>
@@ -2680,9 +2774,9 @@ function renderSalesList(){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="sl-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
+            <div id="sl-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
-              ${[['client',a('العميل','Client')],['size',a('حجم الشركة','Size')],['type',a('نوع التأمين','Type')],['classification',a('التصنيف','Classification')],['tier',a('خاص/عادي','Tier')],['kind',a('نوع الطلب','Kind')],['status',a('الحالة','Status')],['date',a('التاريخ','Date')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
+              ${[['client',a('العميل','Client')],['size',a('حجم الشركة','Size')],['type',a('نوع التأمين','Type')],['classification',a('التصنيف','Classification')],['tier',a('خاص/عادي','Tier')],['kind',a('نوع الطلب','Kind')],['status',a('الحالة','Status')],['date',a('التاريخ','Date')],['opsEmp',a('موظف الأوبريشن','Ops Officer')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
                 <input type="checkbox" ${salesCols[k]?'checked':''} onchange="salesCols['${k}']=this.checked;renderSalesList()" style="accent-color:var(--blue)"/> ${lbl}
               </label>`).join('')}
             </div>
@@ -2701,6 +2795,7 @@ function renderSalesList(){
             ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
             ${C.kind?`<td style="font-size:12.5px">${reqKindLabel(r.reqKind)||'—'}</td>`:''}
             ${C.status?`<td>${badge(st.cls, salesStatusLabel(r.status))}</td>`:''}
+            ${C.opsEmp?`<td style="font-size:12.5px">${(()=>{const hu=users.find(x=>x.user===r.handledBy);return hu?(lang==='ar'?hu.name:hu.nEn):(r.handledBy?r.handledBy:`<span style="color:var(--text3)">${a('غير مُسند','Unassigned')}</span>`);})()}</td>`:''}
             ${C.date?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.created||'—'}</td>`:''}
           </tr>`;
         }).join('')}
@@ -2728,6 +2823,7 @@ function renderSalesTbody(){
       ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
       ${C.kind?`<td style="font-size:12.5px">${reqKindLabel(r.reqKind)||'—'}</td>`:''}
       ${C.status?`<td>${badge(st.cls, salesStatusLabel(r.status))}</td>`:''}
+      ${C.opsEmp?`<td style="font-size:12.5px">${(()=>{const hu=users.find(x=>x.user===r.handledBy);return hu?(lang==='ar'?hu.name:hu.nEn):(r.handledBy?r.handledBy:`<span style="color:var(--text3)">${a('غير مُسند','Unassigned')}</span>`);})()}</td>`:''}
       ${C.date?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.created||'—'}</td>`:''}
       <td></td>
     </tr>`;
@@ -2739,7 +2835,7 @@ function slToggleStatusDD(e){ e.stopPropagation(); slCloseAllDDs(); slStatusDD=t
 function slToggleTypeDD(e){ e.stopPropagation(); slCloseAllDDs(); slTypeDD=true; const d=document.getElementById('sl-type-dd'); if(d)d.style.display='block'; }
 function slToggleClientDD(e){ e.stopPropagation(); slCloseAllDDs(); slClientDD=true; const d=document.getElementById('sl-client-dd'); if(d){d.style.display='block'; setTimeout(()=>{const i=document.getElementById('sl-client-inp');if(i)i.focus();},50);} }
 function slToggleDateDD(e){ e.stopPropagation(); slCloseAllDDs(); slDateDD=true; const d=document.getElementById('sl-date-dd'); if(d)d.style.display='block'; }
-function slToggleColPickerDD(e){ e.stopPropagation(); slCloseAllDDs(); slColPickerDD=true; const d=document.getElementById('sl-col-picker-dd'); if(d)d.style.display='block'; }
+function slToggleColPickerDD(e){ e.stopPropagation(); slCloseAllDDs(); slColPickerDD=true; const d=document.getElementById('sl-col-picker-dd'); if(!d) return; const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
 function slSetStatusFilter(v){ salesFilter=v; slCloseAllDDs(); renderSalesStatusBar(); renderSalesList(); }
 function slSetTypeFilter(v){ salesTypeFilter=v; slCloseAllDDs(); renderSalesList(); }
 
@@ -2880,7 +2976,6 @@ function salesTabContent(r, c){
     const assignedUser = users.find(u => u.user === r.assignedTo);
     return `
     <div class="field-grid">
-      ${salesVRow(a('رقم الطلب','Reference'), r.ref, 'ltr')}
       ${salesVRow(a('حجم الشركة','Company Size'), compSizeLabel(r.compSize))}
       ${salesVRow(a('نوع التأمين','Insurance Type'), insTypeLabel(r.insType))}
       ${salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType))}
@@ -2892,7 +2987,7 @@ function salesTabContent(r, c){
       ${salesVRow(a('تاريخ متابعة','Follow-up Date'), r.followUp||'—', 'ltr')}
       ${salesVRow(a('تاريخ مطلوب','Required By'), r.deadline||'—', 'ltr')}
     </div>
-    ${r.status === 'sent' ? (() => {
+    ${r.status === 'sent' && (r.assignedTo === curUser?.user || !isSalesEmp()) ? (() => {
       const ops = opsStatus(r.opsStatus||'inbox');
       const handler = r.handledBy ? users.find(u=>u.user===r.handledBy) : null;
       const handlerName = handler ? (lang==='ar'?handler.name:handler.nEn) : null;
@@ -2908,9 +3003,9 @@ function salesTabContent(r, c){
         </div>
         ${r.opsStatus==='quote_ready' ? `<div style="margin-top:8px;padding:8px 12px;background:#e0f7fa;border-radius:8px;font-size:12.5px;font-weight:700;color:#0e7490">⚡ ${a('التسعيرة جاهزة — خذ قرارك من الأزرار أعلى الصفحة','Quote is ready — use the buttons above to decide')}</div>` : ''}
         ${recentHistory.length ? `<div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
-          ${recentHistory.map(h=>`<div style="display:flex;gap:8px;font-size:11.5px;color:var(--text2)">
-            <span style="min-width:100px;color:var(--text3);white-space:nowrap">${h.at}</span>
-            <span><b style="color:var(--text)">${h.by}</b> · ${h.from} → ${h.to}${h.note?` (${h.note})`:''}</span>
+          ${recentHistory.map(h=>`<div style="display:flex;align-items:baseline;gap:10px;font-size:11.5px;color:var(--text2)">
+            <span dir="ltr" style="width:90px;min-width:90px;color:var(--text3);white-space:nowrap;font-family:'Inter',sans-serif;font-size:11px">${h.at}</span>
+            <span style="flex:1"><b style="color:var(--text)">${h.by}</b> · ${h.from} → ${h.to}${h.note?` (${h.note})`:''}</span>
           </div>`).join('')}
         </div>` : ''}
       </div>`;
@@ -3761,7 +3856,7 @@ function slsMarkInstPaid(reqId, instIdx){
 let opsMode = 'list', opsCurrentId = null, opsTab = 'info', opsFilter = 'all', opsView = 'cards';
 let opsShowUnassigned = false;
 function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
-let opsCols = {client:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
+let opsCols = {client:true,salesRep:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
 
 function pgOps(){
   if(opsMode === 'view') return opsViewSheet();
@@ -3789,10 +3884,6 @@ function opsListPage(){
       <input type="text" id="op-q" placeholder="${a('بحث في الطلبات...', 'Search requests...')}" oninput="renderOpsList()"/>
     </div>
     <div id="ops-status-bar-wrap">${opsStatusBarHTML()}</div>
-    ${opsUserCanAssign() ? `<button onclick="opsToggleUnassigned()" id="ops-unassigned-btn"
-      style="font-size:11.5px;padding:4px 10px;border-radius:20px;border:1.5px solid ${opsShowUnassigned?'var(--blue)':'var(--border)'};background:${opsShowUnassigned?'var(--blue-lt)':'transparent'};color:${opsShowUnassigned?'var(--blue)':'var(--text2)'};cursor:pointer;white-space:nowrap;transition:all .13s">
-      ⚠ ${a('غير موزّعة','Unassigned')} <span style="font-weight:700">(${requests.filter(r=>r.status==='sent'&&!r.handledBy).length})</span>
-    </button>` : ''}
     <div style="margin-inline-start:auto;display:flex;gap:1px;align-self:center">
       <button onclick="opsSetView('cards')" title="${a('بطاقات','Cards')}"
         style="width:26px;height:24px;border:none;background:transparent;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:${opsView==='cards'?'var(--blue)':'var(--text3)'};transition:color .13s"
@@ -3850,10 +3941,16 @@ function opsStatusBarHTML(){
   const label = active ? (lang==='ar'?active.ar:active.en) : a('الكل','All');
   const dotColor = active ? active.color : 'var(--text3)';
   const isFiltered = opsFilter !== 'all';
+  const unassignedCount = reqs.filter(r=>!r.handledBy).length;
   const allRow = `<div class="filt-dd-row ${opsFilter==='all'?'active':''}" onclick="opStatusBarSelect('all')" style="color:${opsFilter==='all'?'var(--blue)':'var(--text)'}">
     <span class="filt-dd-dot" style="background:var(--text3)"></span>
     <span style="flex:1">${a('الكل','All')} (${reqs.length})</span>
     ${opsFilter==='all'?`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`:''}
+  </div>
+  <div class="filt-dd-row ${opsFilter==='unassigned'?'active':''}" onclick="opStatusBarSelect('unassigned')" style="color:${opsFilter==='unassigned'?'#ef4444':'var(--text)'}">
+    <span class="filt-dd-dot" style="background:#ef4444"></span>
+    <span style="flex:1">⚠ ${a('غير موزّعة','Unassigned')} (${unassignedCount})</span>
+    ${opsFilter==='unassigned'?`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`:''}
   </div>`;
   const phases = [...new Set(OPS_STATUSES.map(s=>s.phase))];
   const phaseRows = phases.map(ph => {
@@ -3905,7 +4002,7 @@ let opTypeDD=false, opStatusDD=false, opColPickerDD=false;
 function opCloseAllDDs(){ ['op-type-dd','op-status-dd','op-col-picker-dd'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';}); opTypeDD=opStatusDD=opColPickerDD=false; }
 function opToggleTypeDD(e){ e.stopPropagation(); opCloseAllDDs(); opTypeDD=true; const d=document.getElementById('op-type-dd'); if(d)d.style.display='block'; }
 function opToggleStatusDD(e){ e.stopPropagation(); opCloseAllDDs(); opStatusDD=true; const d=document.getElementById('op-status-dd'); if(d)d.style.display='block'; }
-function opToggleColPickerDD(e){ e.stopPropagation(); opCloseAllDDs(); opColPickerDD=true; const d=document.getElementById('op-col-picker-dd'); if(d)d.style.display='block'; }
+function opToggleColPickerDD(e){ e.stopPropagation(); opCloseAllDDs(); opColPickerDD=true; const d=document.getElementById('op-col-picker-dd'); if(!d) return; const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
 function opSetTypeFilter(v){ opsTypeFilter=v; opCloseAllDDs(); renderOpsList(); }
 function opSetStatusFilter(v){ opsFilter=v; opCloseAllDDs(); renderOpsStatusBar(); renderOpsList(); }
 document.addEventListener('click', e => {
@@ -3917,9 +4014,8 @@ document.addEventListener('click', e => {
 function opsFiltered(){
   const q = (document.getElementById('op-q')?.value || '').toLowerCase().trim();
   return opsRequests().filter(r => {
-    if(opsShowUnassigned && r.handledBy) return false;
-    const os = r.opsStatus || 'inbox';
-    if(opsFilter !== 'all' && os !== opsFilter) return false;
+    if(opsFilter === 'unassigned') { if(r.handledBy) return false; }
+    else { const os = r.opsStatus || 'inbox'; if(opsFilter !== 'all' && os !== opsFilter) return false; }
     if(opsTypeFilter !== 'all' && r.insType !== opsTypeFilter) return false;
     if(q){
       const hay = (r.ref + ' ' + (salesClientName(r)||'') + ' ' + (r.notes||'')).toLowerCase();
@@ -3950,6 +4046,7 @@ function renderOpsTable(list){
         <thead><tr style="background:var(--bg);border-bottom:2px solid var(--border)">
           <th class="cc-th" style="position:relative"><span>${a('رقم الطلب','Ref')}</span><span class="cc-resize"></span></th>
           ${C.client?`<th class="cc-th" style="position:relative"><span>${a('العميل','Client')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.salesRep?`<th class="cc-th" style="position:relative"><span>${a('المندوب','Sales Rep')}</span><span class="cc-resize"></span></th>`:''}
           ${C.size?`<th class="cc-th" style="position:relative"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
           ${C.type?`<th class="cc-th" style="position:relative">
             <div style="display:flex;align-items:center;gap:4px">
@@ -3994,9 +4091,9 @@ function renderOpsTable(list){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="op-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
+            <div id="op-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
-              ${[['client',a('العميل','Client')],['size',a('حجم الشركة','Size')],['type',a('نوع التأمين','Type')],['classification',a('التصنيف','Classification')],['tier',a('خاص/عادي','Tier')],['quotes',a('عروض الأسعار','Quotes')],['status',a('الحالة','Status')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
+              ${[['client',a('العميل','Client')],['salesRep',a('المندوب','Sales Rep')],['size',a('حجم الشركة','Size')],['type',a('نوع التأمين','Type')],['classification',a('التصنيف','Classification')],['tier',a('خاص/عادي','Tier')],['quotes',a('عروض الأسعار','Quotes')],['status',a('الحالة','Status')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
                 <input type="checkbox" ${opsCols[k]?'checked':''} onchange="opsCols['${k}']=this.checked;renderOpsList()" style="accent-color:var(--blue)"/> ${lbl}
               </label>`).join('')}
             </div>
@@ -4009,6 +4106,7 @@ function renderOpsTable(list){
           return `<tr style="cursor:pointer" onclick="opsOpen('${r.id}')">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span></td>
             ${C.client?`<td style="font-weight:600">${salesClientName(r) || '—'}</td>`:''}
+            ${C.salesRep?`<td style="font-size:12.5px">${(()=>{const u=users.find(x=>x.user===r.assignedTo);return u?(lang==='ar'?u.name:u.nEn):(r.assignedTo||'—');})()} </td>`:''}
             ${C.size?`<td style="font-size:12.5px">${compSizeLabel(r.compSize)||'—'}</td>`:''}
             ${C.type?`<td style="font-size:12.5px">${insTypeLabel(r.insType)}</td>`:''}
             ${C.classification?`<td style="font-size:12.5px">${insSubLabel(r.insType,r.subType)||'—'}</td>`:''}
@@ -4018,13 +4116,10 @@ function renderOpsTable(list){
             ${opsUserCanAssign() ? `<td onclick="event.stopPropagation()" style="padding:4px 8px">
               <div style="display:flex;align-items:center;gap:6px">
                 <select id="ops-assign-sel-${r.id}"
-                  onmouseover="this.style.borderBottomColor='var(--border)'"
-                  onmouseout="this.style.borderBottomColor='transparent'"
-                  onfocus="this.style.borderBottomColor='var(--blue)'"
-                  onblur="this.style.borderBottomColor='transparent'"
-                  style="font-family:var(--font);font-size:12px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s;max-width:130px">
+                  class="fs"
+                  style="font-size:12px;max-width:130px">
                   <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-                  ${users.filter(u=>u.dept==='operations'||u.dept==='all').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+                  ${users.filter(u=>u.dept==='operations'&&u.role==='employee').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
                 </select>
                 <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
                   class="btn btn-p btn-sm" style="padding:3px 8px;font-size:11px;white-space:nowrap">
@@ -4060,13 +4155,10 @@ function renderOpsCards(list){
       ${opsUserCanAssign() ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)" onclick="event.stopPropagation()">
         <div style="display:flex;align-items:center;gap:6px">
           <select id="ops-assign-sel-${r.id}"
-            onmouseover="this.style.borderBottomColor='var(--border)'"
-            onmouseout="this.style.borderBottomColor='transparent'"
-            onfocus="this.style.borderBottomColor='var(--blue)'"
-            onblur="this.style.borderBottomColor='transparent'"
-            style="flex:1;font-family:var(--font);font-size:12px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s">
+            class="fs"
+            style="flex:1;font-size:12px">
             <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-            ${users.filter(u=>u.dept==='operations'||u.dept==='all').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+            ${users.filter(u=>u.dept==='operations'&&u.role==='employee').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
           </select>
           <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
             class="btn btn-p btn-sm" style="padding:4px 10px;font-size:11.5px;white-space:nowrap">
@@ -4225,11 +4317,10 @@ function opsTabContent(r, c){
   if(opsTab === 'info'){
     const assignedUser  = users.find(u => u.user === r.assignedTo);
     const handledUser   = r.handledBy ? users.find(u => u.user === r.handledBy) : null;
-    const opsEmployees  = users.filter(u => u.dept === 'operations' || u.dept === 'all');
+    const opsEmployees  = users.filter(u => u.dept === 'operations' && u.role === 'employee');
     const isInbox       = (r.opsStatus || 'inbox') === 'inbox';
     return `
     <div class="field-grid">
-      ${salesVRow(a('رقم الطلب','Reference'), r.ref, 'ltr')}
       ${salesVRow(a('حجم الشركة','Company Size'), compSizeLabel(r.compSize))}
       ${salesVRow(a('نوع التأمين','Type'), insTypeLabel(r.insType))}
       ${salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType))}
@@ -4248,11 +4339,8 @@ function opsTabContent(r, c){
         ${isInbox ? `
         <div style="display:flex;align-items:center;gap:8px;flex:1">
           <select id="ops-handleby-sel"
-            onmouseover="this.style.borderBottomColor='var(--border)'"
-            onmouseout="this.style.borderBottomColor='transparent'"
-            onfocus="this.style.borderBottomColor='var(--blue)'"
-            onblur="this.style.borderBottomColor='transparent'"
-            style="flex:1;font-family:var(--font);font-size:13px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s">
+            class="fs"
+            style="flex:1">
             <option value="">${a('— لم يُكلَّف بعد —','— Unassigned —')}</option>
             ${opsEmployees.map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
           </select>
@@ -4417,7 +4505,10 @@ function opsTabContent(r, c){
         <div style="flex:1">
           <div style="font-size:13px;color:var(--text);font-weight:600">${h.from||'—'} → ${h.to||'—'}</div>
           ${h.note?`<div style="font-size:12px;color:var(--text2);margin-top:2px">${h.note}</div>`:''}
-          <div style="font-size:11.5px;color:var(--text3);margin-top:4px">${h.by} · ${h.at}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11.5px;color:var(--text3)">
+            <span dir="ltr" style="font-family:'Inter',sans-serif;font-size:11px;min-width:90px;white-space:nowrap">${h.at}</span>
+            <span>${h.by}</span>
+          </div>
         </div>
       </div>`).join('') + `</div>`;
   }
@@ -4540,6 +4631,7 @@ function opsConfirmReceipt(){
   addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('قيد المعالجة','Processing'));
   r.opsStatus = 'processing';
   sbSyncReq(opsCurrentId);
+  addNotif(r.assignedTo, a('بدأ معالجة طلبك — الطلب: ','Your request is now being processed — ref: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsMarkQuoteReady(){
@@ -4549,6 +4641,7 @@ function opsMarkQuoteReady(){
   addHistory(r, a('قيد المعالجة','Processing'), a('التسعيرة جاهزة','Quote Ready'));
   r.opsStatus = 'quote_ready';
   sbSyncReq(opsCurrentId);
+  addNotif(r.assignedTo, a('التسعيرة جاهزة للمراجعة — الطلب: ','Quote ready for your review — request: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsStartPricing(){
@@ -4557,6 +4650,7 @@ function opsStartPricing(){
   addHistory(r, opsStatusLabel(r.opsStatus||'inbox'), a('قيد التسعير','Pricing'));
   r.opsStatus = 'pricing';
   sbSyncReq(opsCurrentId);
+  addNotif(r.assignedTo, a('بدأ تسعير طلبك — الطلب: ','Pricing has started for your request — ref: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsSendToClient(){
@@ -4568,7 +4662,7 @@ function opsSendToClient(){
   r.opsStatus = 'sent_client';
   r.phase = 'quotation';
   sbSyncReq(opsCurrentId);
-  alert(a('تم إرسال العرض للعميل ✓\nسيصل تنبيه لموظف المبيعات للمتابعة','Sent to client ✓\nSales will be notified to follow up'));
+  addNotif(r.assignedTo, a('تم إرسال العرض للعميل — الطلب: ','Quote sent to client — request: ') + r.ref + a(' · يرجى المتابعة مع العميل',' · please follow up with client'), 'success');
   navigate('operations');
 }
 function opsStartExecution(){
@@ -4589,6 +4683,7 @@ function opsIssuePolicy(){
   addHistory(r, a('قيد التنفيذ','Executing'), a('صدرت الوثيقة','Policy Issued'));
   r.opsStatus = 'issued';
   sbSyncReq(opsCurrentId);
+  addNotif(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success');
   navigate('operations');
 }
 function opsMarkDone(){
@@ -4908,7 +5003,7 @@ let ccCatDD=false, ccStatusDD=false, ccColPickerDD=false;
 function ccCloseAllDDs(){ ['cc-cat-dd','cc-status-dd','cc-col-picker-dd','ct-type-bar-dd'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';}); ccCatDD=ccStatusDD=ccColPickerDD=ctTypeBarDD=false; }
 function ccToggleCatDD(e){ e.stopPropagation(); ccCloseAllDDs(); ccCatDD=true; const d=document.getElementById('cc-cat-dd'); if(d)d.style.display='block'; }
 function ccToggleStatusDD(e){ e.stopPropagation(); ccCloseAllDDs(); ccStatusDD=true; const d=document.getElementById('cc-status-dd'); if(d)d.style.display='block'; }
-function ccToggleColPickerDD(e){ e.stopPropagation(); ccCloseAllDDs(); ccColPickerDD=true; const d=document.getElementById('cc-col-picker-dd'); if(d)d.style.display='block'; }
+function ccToggleColPickerDD(e){ e.stopPropagation(); ccCloseAllDDs(); ccColPickerDD=true; const d=document.getElementById('cc-col-picker-dd'); if(!d) return; const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
 function ccSetCatFilter(v){ ctFilter=v; ccCloseAllDDs(); renderCC(); renderCCTypesBar(); }
 function ccSetStatusFilter(v){ ctStatusFilter=v; ccCloseAllDDs(); renderCC(); }
 document.addEventListener('click', e => {
@@ -5042,7 +5137,7 @@ function renderCCList(list){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="cc-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
+            <div id="cc-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
               ${[['category',a('التصنيف','Category')],['person',a('الشخص المسؤول','Contact')],['phone',a('الجوال','Phone')],['email',a('البريد','Email')],['status',a('الحالة','Status')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
                 <input type="checkbox" ${ccCols[k]?'checked':''} onchange="ccCols['${k}']=this.checked;renderCC()" style="accent-color:var(--blue)"/> ${lbl}
@@ -5283,14 +5378,15 @@ function ccEditSheet(){
     <!-- زر فرد / شركة -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
       <div class="cc-kind-toggle">
-        <button id="ckind-company" class="ck-btn ${ccKind==='company'?'active':''}" onclick="ccSetKind('company')">
+        <button id="ckind-company" class="ck-btn ${ccKind==='company'?'active':''}" ${(ccLockCat && ccEditCat==='client') ? '' : `onclick="ccSetKind('company')"`} style="${(ccLockCat && ccEditCat==='client') ? 'cursor:default' : ''}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
           ${a('شركة','Company')}
         </button>
+        ${(ccLockCat && ccEditCat==='client') ? '' : `
         <button id="ckind-individual" class="ck-btn ${ccKind==='individual'?'active':''}" onclick="ccSetKind('individual')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           ${a('فرد','Individual')}
-        </button>
+        </button>`}
       </div>
     </div>
     <div class="sheet-head">
@@ -5469,6 +5565,7 @@ function ccCatChanged(){
 }
 
 function ccSetKind(kind){
+  if(ccLockCat && ccEditCat === 'client' && kind === 'individual') return;
   ccKind = kind;
   // تحديث أزرار التبديل
   const btnC = document.getElementById('ckind-company');
@@ -5568,7 +5665,7 @@ async function ccSave(){
   const notesVal = notesEl ? notesEl.value.trim() : (ccTmpNotes || '');
   // نظّف جهات الاتصال الإضافية الفارغة
   const cleanPeople = ccExtraPeople.filter(p => p.name || p.email || p.phone);
-  const cat = g('ef-cat');
+  const cat = g('ef-cat') || ccEditCat || 'client';
   // العنوان المختصر للعرض في القوائم
   const addrParts = [g('ef-district'), g('ef-city'), g('ef-country')].filter(Boolean);
   const d = {
@@ -6067,7 +6164,7 @@ function finCoaPage(){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="coa-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
+            <div id="coa-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
               ${[
                 ['type2',  a('النوع','Type')],
@@ -6227,7 +6324,7 @@ function coaSetNameFilter(v){ coaNameFilter=v; coaNameDD=false; const d=document
 function coaToggleCodeDD(e){ e.stopPropagation(); coaCloseAllDDs(); coaCodeDD=true; const d=document.getElementById('coa-code-dd'); if(d){d.style.display='block'; setTimeout(()=>{const i=document.getElementById('coa-code-inp');if(i)i.focus();},50);} }
 function coaToggleNameDD(e){ e.stopPropagation(); coaCloseAllDDs(); coaNameDD=true; const d=document.getElementById('coa-name-dd'); if(d){d.style.display='block'; setTimeout(()=>{const i=document.getElementById('coa-name-inp');if(i)i.focus();},50);} }
 function coaToggleActiveDD(e){ e.stopPropagation(); coaCloseAllDDs(); coaActiveDD=true; const d=document.getElementById('coa-active-dd'); if(d)d.style.display='block'; }
-function coaToggleColPickerDD(e){ e.stopPropagation(); coaCloseAllDDs(); coaColPickerDD=true; const d=document.getElementById('coa-col-picker-dd'); if(d)d.style.display='block'; }
+function coaToggleColPickerDD(e){ e.stopPropagation(); coaCloseAllDDs(); coaColPickerDD=true; const d=document.getElementById('coa-col-picker-dd'); if(!d) return; const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
 function coaSetTypeFilter(t){ coaTypeFilter=t; coaL2Filter='all'; coaL1DD=false; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 function coaSetStatusFilter(v){ coaStatusFilter=v; coaActiveDD=false; const d=document.getElementById('coa-active-dd');if(d)d.style.display='none'; const tb=document.getElementById('coa-tbody'); if(tb)tb.innerHTML=coaRenderBody(); }
 function coaToggleCol(k,v){ coaCols[k]=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
@@ -6739,7 +6836,7 @@ function finJnlPage(){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="jnl-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
+            <div id="jnl-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
               ${[
                 ['type',   a('النوع','Type')],
@@ -7403,7 +7500,7 @@ function jnlToggleStatusDD(e){
 function jnlSetGlobalQ(v){ jnlGlobalQ=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 function jnlSetStatusF(v){ jnlStatusF=v; jnlStatusDDH=false; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 function jnlSetPartnerF(v){ jnlPartnerF=v; jnlPartnerDDH=false; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
-function jnlToggleColPickerDD(e){ e.stopPropagation(); jnlColPickerDD=!jnlColPickerDD; const d=document.getElementById('jnl-col-picker-dd'); if(d)d.style.display=jnlColPickerDD?'block':'none'; }
+function jnlToggleColPickerDD(e){ e.stopPropagation(); jnlColPickerDD=!jnlColPickerDD; const d=document.getElementById('jnl-col-picker-dd'); if(!d) return; if(jnlColPickerDD){ const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; } else { d.style.display='none'; } }
 function jnlToggleCol(k,v){ jnlCols[k]=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 
 function jnlToggleTypeDD(e){
@@ -7664,7 +7761,8 @@ function ledgerToggleAccDD(e){
 }
 function ledgerToggleColPicker(e){
   e.stopPropagation(); ledgerColPickerDD=!ledgerColPickerDD;
-  const d=document.getElementById('ledger-col-picker-dd'); if(d)d.style.display=ledgerColPickerDD?'block':'none';
+  const d=document.getElementById('ledger-col-picker-dd'); if(!d) return;
+  if(ledgerColPickerDD){ const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; } else { d.style.display='none'; }
 }
 function ledgerToggleCol(k,v){
   ledgerCols[k]=v;
@@ -8004,7 +8102,7 @@ function finLedgerPage(){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="ledger-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
+            <div id="ledger-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
               ${[['type',a('النوع','Type')],['desc',a('البيان','Description')]].map(([k,lbl])=>`
               <label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)">
@@ -8445,7 +8543,7 @@ function _trialCloseAllDDs(){ ['trial-code-dd','trial-name-dd','trial-l1-dd','tr
 function trialToggleCodeDD(e){ e.stopPropagation(); _trialCloseAllDDs(); trialCodeDD=true; const d=document.getElementById('trial-code-dd'); if(d)d.style.display='block'; setTimeout(()=>{const i=document.getElementById('trial-code-inp');if(i)i.focus();},60); }
 function trialToggleNameDD(e){ e.stopPropagation(); _trialCloseAllDDs(); trialNameDD=true; const d=document.getElementById('trial-name-dd'); if(d)d.style.display='block'; setTimeout(()=>{const i=document.getElementById('trial-name-inp');if(i)i.focus();},60); }
 function trialToggleL1DD(e) { e.stopPropagation(); _trialCloseAllDDs(); trialL1DD=true; const d=document.getElementById('trial-l1-dd'); if(d)d.style.display='block'; }
-function trialToggleColPickerDD(e){ e.stopPropagation(); _trialCloseAllDDs(); trialColPickerDD=true; const d=document.getElementById('trial-col-picker-dd'); if(d)d.style.display='block'; }
+function trialToggleColPickerDD(e){ e.stopPropagation(); _trialCloseAllDDs(); trialColPickerDD=true; const d=document.getElementById('trial-col-picker-dd'); if(!d) return; const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
 function trialToggleCol(k,v){ trialCols[k]=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 function trialSetCodeF(v){ trialCodeF=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
 function trialSetNameF(v){ trialNameF=v; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgFin();setTimeout(initFin,0);} }
@@ -8802,7 +8900,7 @@ function finTrialPage(){
               onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
             </button>
-            <div id="trial-col-picker-dd" style="display:none;position:absolute;${lang==='ar'?'left':'right'}:0;top:calc(100% + 2px);z-index:200;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
+            <div id="trial-col-picker-dd" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:175px;box-shadow:0 8px 24px #0002">
               <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
               ${[
                 ['type',     a('نوع الحساب','Account Type')],
@@ -10529,7 +10627,7 @@ function stOpenEditUser(id){
   openM('euModal');
 }
 function openEditUser(id){ stOpenEditUser(id); }
-function saveEditUser(){
+async function saveEditUser(){
   const u=users.find(x=>x.id===editingUserId); if(!u) return;
   const np=document.getElementById('eu-pass').value.trim();
   const np2=document.getElementById('eu-pass2').value.trim();
@@ -10540,6 +10638,14 @@ function saveEditUser(){
   if(np) u.pass=np;
   u.dept=document.getElementById('eu-dept').value;
   u.role=document.getElementById('eu-role').value;
+  if(curUser && editingUserId === curUser.id){
+    curUser.name = u.name; curUser.nEn = u.nEn;
+    curUser.user = u.user; curUser.dept = u.dept; curUser.role = u.role;
+    localStorage.setItem('erp_curUser', JSON.stringify(curUser));
+    refreshCurUserUI();
+  }
+  const {error} = await sb.from('profiles').update({name:u.name, name_en:u.nEn, username:u.user, dept:u.dept, role:u.role}).eq('id', Number(u.id));
+  if(error) console.warn(a('تحذير — فشل حفظ البيانات على السيرفر: ','Warning — server save failed: ') + error.message);
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
@@ -11077,5 +11183,9 @@ initApp();
 
 
 </script>
+
+<!-- لوحة الإشعارات — Notification Panel -->
+<div id="notif-panel" style="display:none;position:fixed;top:0;left:0;z-index:9500;background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:0 8px 32px #0003;width:300px;max-height:420px;overflow-y:auto;direction:inherit"></div>
+
 </body>
 </html>
