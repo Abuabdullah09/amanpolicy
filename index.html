@@ -1483,7 +1483,13 @@ function addNotif(targetUser, text, type){
   };
   notifications.push(n);
   localStorage.setItem('erp_notifs', JSON.stringify(notifications));
-  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).then(({error}) => { if(error) console.warn('notif insert failed', error.message); });
+  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).select('id').single().then(({data:sbRow, error}) => {
+    if(error){ console.warn('notif insert failed', error.message); return; }
+    if(sbRow){
+      const idx = notifications.findIndex(x => x.id === n.id);
+      if(idx >= 0){ notifications[idx].id = sbRow.id; localStorage.setItem('erp_notifs', JSON.stringify(notifications)); }
+    }
+  });
   if(curUser && curUser.user === targetUser){
     updateNotifBadge();
     const panel = document.getElementById('notif-panel');
@@ -1502,8 +1508,19 @@ function updateNotifBadge(){
 
 function markNotifsRead(){
   if(!curUser) return;
-  notifications.forEach(n => { if(n.to === curUser.user) n.read = true; });
+  const sbIds = [];
+  notifications.forEach(n => {
+    if(n.to === curUser.user && !n.read){
+      n.read = true;
+      if(typeof n.id === 'number') sbIds.push(n.id);
+    }
+  });
   localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  if(sbIds.length){
+    sb.from('notifications').update({read:true}).in('id', sbIds).then(({error}) => {
+      if(error) console.warn('markRead sync failed', error.message);
+    });
+  }
   const panel = document.getElementById('notif-panel');
   if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
   updateNotifBadge();
@@ -1543,9 +1560,12 @@ function toggleNotifPanel(e){
   panel.style.display = 'block';
 }
 
+let _notifChannel = null;
 function subscribeNotifs(){
   if(!curUser) return;
-  sb.channel('erp-notifs-' + curUser.user)
+  if(_notifChannel){ try{ sb.removeChannel(_notifChannel); }catch(e){} _notifChannel = null; }
+  const safeUser = curUser.user.replace(/[^a-zA-Z0-9_-]/g, '-');
+  _notifChannel = sb.channel('erp-notifs-' + safeUser)
     .on('postgres_changes', {event:'INSERT', schema:'public', table:'notifications', filter:'to_user=eq.' + curUser.user}, (payload) => {
       const r = payload.new;
       if(!r || !r.to_user) return;
@@ -1556,9 +1576,14 @@ function subscribeNotifs(){
       updateNotifBadge();
       const panel = document.getElementById('notif-panel');
       if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
-    })
-    .subscribe();
+    });
+  try {
+    _notifChannel.subscribe((status) => {
+      if(status === 'CHANNEL_ERROR') console.warn('notif realtime error — check notifications table & publication in Supabase');
+    });
+  } catch(e){ console.warn('subscribeNotifs subscribe failed', e); }
 }
+const setupNotificationsRealtime = subscribeNotifs;
 
 document.addEventListener('click', e => {
   const panel = document.getElementById('notif-panel');
@@ -2007,7 +2032,10 @@ async function initApp(){
   sb.auth.onAuthStateChange(async (event,session)=>{
     if(_addingUser) return;
     if(event==='SIGNED_IN'  && session) await afterLogin(session.user);
-    if(event==='SIGNED_OUT'){ curUser=null; contacts=[]; requests=[]; employees=[]; }
+    if(event==='SIGNED_OUT'){
+      if(_notifChannel){ try{ sb.removeChannel(_notifChannel); }catch(e){} _notifChannel=null; }
+      curUser=null; contacts=[]; requests=[]; employees=[]; notifications=[];
+    }
   });
 }
 
@@ -10723,7 +10751,7 @@ async function saveEditUser(){
     refreshCurUserUI();
   }
   const {error} = await sb.from('profiles').update({name:u.name, name_en:u.nEn, username:u.user, dept:u.dept, role:u.role}).eq('id', u.id);
-  if(error) console.warn(a('تحذير — فشل حفظ البيانات على السيرفر: ','Warning — server save failed: ') + error.message);
+  if(error){ alert(a('فشل حفظ الإعدادات على السيرفر:\n','Settings save failed:\n') + error.message); return; }
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
