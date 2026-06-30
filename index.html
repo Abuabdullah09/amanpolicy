@@ -1138,13 +1138,13 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
 <div class="overlay" id="slApproveModal">
   <div class="modal" style="max-width:480px">
     <div class="m-hd">
-      <span class="m-tt">✓ اعتماد العرض / Approve Quote</span>
+      <span class="m-tt" id="sl-approve-modal-title">✓ اعتماد العرض / Approve Quote</span>
       <button class="m-cl" onclick="closeM('slApproveModal')">×</button>
     </div>
     <div class="m-bd" id="sl-approve-body"></div>
     <div class="m-ft">
-      <button class="btn btn-p" onclick="salesConfirmApproval()">اعتماد ونقل للتنفيذ</button>
-      <button class="btn btn-o" onclick="closeM('slApproveModal')">إلغاء</button>
+      <button class="btn btn-p" id="sl-approve-confirm-btn" onclick="salesConfirmApproval()">اعتماد ونقل للتنفيذ</button>
+      <button class="btn btn-o" id="sl-approve-cancel-btn" onclick="closeM('slApproveModal')">إلغاء</button>
     </div>
   </div>
 </div>
@@ -1160,6 +1160,27 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
     <div class="m-ft">
       <button class="btn btn-p" onclick="salesConfirmReturn()">إرجاع للأوبريشن</button>
       <button class="btn btn-o" onclick="closeM('slReturnModal')">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- نافذة طلب تعديل التسعيرة (المبيعات — quote_ready) -->
+<div class="overlay" id="slRevisionModal">
+  <div class="modal" style="max-width:460px">
+    <div class="m-hd">
+      <span class="m-tt" id="sl-revision-title">↩ يتطلب تعديل / Needs Revision</span>
+      <button class="m-cl" onclick="closeM('slRevisionModal')">×</button>
+    </div>
+    <div class="m-bd">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:14px" id="sl-revision-ref"></div>
+      <div class="field-row" style="flex-direction:column;align-items:stretch;gap:6px">
+        <span class="field-row-label" id="sl-revision-lbl">سبب التعديل المطلوب (إلزامي)</span>
+        <textarea id="sl-revision-notes" class="fta" rows="4" placeholder="وضّح ما يحتاج تعديل..."></textarea>
+      </div>
+    </div>
+    <div class="m-ft">
+      <button class="btn btn-p" id="sl-revision-confirm" onclick="salesDecide_ConfirmRevision()">إرسال للتعديل</button>
+      <button class="btn btn-o" id="sl-revision-cancel" onclick="closeM('slRevisionModal')">إلغاء</button>
     </div>
   </div>
 </div>
@@ -1432,13 +1453,15 @@ const OPS_STATUSES = [
   {id:'pricing',           ar:'قيد التسعير',         en:'Pricing',            color:'#1e4d8c', cls:'bg-blue',   phase:'quotation'},
   {id:'sent_client', ar:'أُرسل للعميل',    en:'Sent to Client', color:'#6b46a8', cls:'bg-purple', phase:'quotation'},
   {id:'approved',    ar:'معتمد',           en:'Approved',       color:'#0e7490', cls:'bg-teal',   phase:'quotation'},
+  {id:'cancelled',   ar:'ملغى',            en:'Cancelled',      color:'#ef4444', cls:'bg-red',    phase:'quotation'},
+  {id:'lost',        ar:'مرفوض - خسارة',   en:'Lost',           color:'#ef4444', cls:'bg-red',    phase:'quotation'},
   // المرحلة الثانية: التنفيذ
   {id:'executing',   ar:'قيد التنفيذ',     en:'Executing',      color:'#1e4d8c', cls:'bg-blue',   phase:'execution'},
   {id:'issued',      ar:'صدرت الوثيقة',    en:'Policy Issued',  color:'#6b46a8', cls:'bg-purple', phase:'execution'},
   {id:'done',        ar:'مكتمل',           en:'Done',           color:'#1e7a52', cls:'bg-green',  phase:'execution'},
 ];
 // الحالة التي تخص مين (للتنبيهات): سُمح بالمتابعة للمبيعات
-function opsStatusOwner(id){ return id === 'sent_client' ? 'sales' : 'operations'; }
+function opsStatusOwner(id){ return (id === 'sent_client' || id === 'quote_ready') ? 'sales' : 'operations'; }
 function opsStatus(id){ return OPS_STATUSES.find(s => s.id === id) || OPS_STATUSES[0]; }
 function opsStatusLabel(id){ const s = opsStatus(id); return lang==='ar'?s.ar:s.en; }
 
@@ -2801,6 +2824,12 @@ function salesViewSheet(){
       ${r.status === 'draft' ? `<button class="btn btn-o btn-sm" onclick="salesMarkReady()">✓ ${a('تأكيد / مكتمل','Mark as Ready')}</button>` : ''}
       ${r.status === 'ready' ? `<button class="btn btn-p btn-sm" onclick="salesSendToOps()">${a('إرسال للأوبريشن','Send to Operations')} →</button>` : ''}
       ${(r.status === 'sent' && (!r.opsStatus || r.opsStatus === 'inbox')) ? `<button class="btn btn-o btn-sm" onclick="salesRecall()">↩ ${a('استرجاع','Recall')}</button>` : ''}
+      ${(r.status === 'sent' && r.opsStatus === 'quote_ready') ? `
+        <button class="btn btn-p btn-sm" onclick="salesDecide_Approve()">✓ ${a('موافق','Approve')}</button>
+        <button class="btn btn-o btn-sm" onclick="salesDecide_Revision()">↩ ${a('يتطلب تعديل','Needs Revision')}</button>
+        <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ ${a('رفض - خسارة','Lost')}</button>
+        <button class="btn btn-o btn-sm" style="color:var(--text2)" onclick="salesDecide_Cancel()">⊘ ${a('إلغاء','Cancel')}</button>
+      ` : ''}
       ${(r.status === 'sent' && r.opsStatus === 'sent_client') ? `
         <button class="btn btn-o btn-sm" onclick="salesReturnToOps()">↩ ${a('إرجاع للتعديل','Return')}</button>
         <button class="btn btn-p btn-sm" onclick="salesApproveQuote()">✓ ${a('اعتماد العرض','Approve')}</button>
@@ -2877,7 +2906,8 @@ function salesTabContent(r, c){
             ? `<span style="font-size:12.5px;color:var(--text2)">${a('تتم المعالجة بواسطة:','Handled by:')} <b style="color:var(--text)">${handlerName}</b></span>`
             : `<span style="font-size:12.5px;font-weight:600;color:#b8740f">${a('بانتظار الإسناد','Awaiting Assignment')}</span>`}
         </div>
-        ${recentHistory.length ? `<div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px">
+        ${r.opsStatus==='quote_ready' ? `<div style="margin-top:8px;padding:8px 12px;background:#e0f7fa;border-radius:8px;font-size:12.5px;font-weight:700;color:#0e7490">⚡ ${a('التسعيرة جاهزة — خذ قرارك من الأزرار أعلى الصفحة','Quote is ready — use the buttons above to decide')}</div>` : ''}
+        ${recentHistory.length ? `<div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
           ${recentHistory.map(h=>`<div style="display:flex;gap:8px;font-size:11.5px;color:var(--text2)">
             <span style="min-width:100px;color:var(--text3);white-space:nowrap">${h.at}</span>
             <span><b style="color:var(--text)">${h.by}</b> · ${h.from} → ${h.to}${h.note?` (${h.note})`:''}</span>
@@ -2885,7 +2915,7 @@ function salesTabContent(r, c){
         </div>` : ''}
       </div>`;
     })() : ''}
-    ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المرغوبة','Preferred Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>x.id===id);return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
+    ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المرغوبة','Preferred Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>String(x.id)===String(id));return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
     ${r.notes ? `<div style="margin-top:18px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:6px">${a('ملاحظات','Notes')}</div><div style="font-size:13.5px;color:var(--text);line-height:1.7;white-space:pre-wrap">${r.notes}</div></div>` : ''}`;
   }
   if(salesTab === 'quotes'){
@@ -3108,7 +3138,7 @@ function salesTypeChanged(){
 /* شركات التأمين — قائمة منسدلة مع checkboxes */
 function salesInsurerLabel(){
   if(!salesTmpInsurers.length) return a('اختر شركات التأمين...','Select insurers...');
-  const names = salesTmpInsurers.map(id => { const c = contacts.find(x=>x.id===id); return c?c.name:''; }).filter(Boolean);
+  const names = salesTmpInsurers.map(id => { const c = contacts.find(x=>String(x.id)===String(id)); return c?c.name:''; }).filter(Boolean);
   if(names.length <= 2) return names.join('، ');
   return `${names.length} ${a('شركات مختارة','selected')}`;
 }
@@ -3118,9 +3148,9 @@ function salesInsurerCheckboxes(){
     return `<div style="padding:12px;color:var(--text3);font-size:12.5px;text-align:center">${a('لا توجد شركات تأمين','No insurers')}</div>`;
   }
   return insurers.map(c => {
-    const on = salesTmpInsurers.includes(c.id);
+    const on = salesTmpInsurers.some(x => String(x) === String(c.id));
     return `<label class="sl-multi-item">
-      <input type="checkbox" ${on?'checked':''} onchange="salesToggleInsurer(${c.id})">
+      <input type="checkbox" ${on?'checked':''} onchange="salesToggleInsurer('${c.id}')">
       <span>${c.name}</span>
     </label>`;
   }).join('');
@@ -3132,9 +3162,9 @@ function salesToggleInsurerMenu(e){
   menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
 }
 function salesToggleInsurer(id){
-  const i = salesTmpInsurers.indexOf(id);
+  const i = salesTmpInsurers.findIndex(x => String(x) === String(id));
   if(i >= 0) salesTmpInsurers.splice(i, 1);
-  else salesTmpInsurers.push(id);
+  else salesTmpInsurers.push(String(id));
   const lbl = document.getElementById('sl-insurer-label');
   if(lbl) lbl.textContent = salesInsurerLabel();
 }
@@ -3419,8 +3449,13 @@ function salesApproveQuote(){
   const r = requests.find(x => x.id === salesCurrentId);
   if(!r) return;
   salesApprovalDocs = [];
-  // نعرض نافذة الاعتماد
   document.getElementById('sl-approve-body').innerHTML = salesApproveModalBody(r);
+  const _t = document.getElementById('sl-approve-modal-title');
+  if(_t) _t.textContent = '✓ ' + a('اعتماد العرض','Approve Quote');
+  const _b = document.getElementById('sl-approve-confirm-btn');
+  if(_b) _b.textContent = a('اعتماد ونقل للتنفيذ','Approve & Move to Execution');
+  const _c = document.getElementById('sl-approve-cancel-btn');
+  if(_c) _c.textContent = a('إلغاء','Cancel');
   openM('slApproveModal');
 }
 function salesApproveModalBody(r){
@@ -3517,6 +3552,74 @@ function salesConfirmReturn(){
   navigate('sales');
 }
 
+
+/* ════════ قرار المبيعات على التسعيرة الجاهزة (ب-١) ════════ */
+function salesDecide_Approve(){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  if(!confirm(a('تأكيد موافقة العميل؟ سيُنقل الطلب لمرحلة الإصدار.','Confirm client approval? The request will move to execution.'))) return;
+  r.opsStatus = 'approved';
+  r.phase = 'execution';
+  r.revisionReason = null;
+  addHistory(r, a('التسعيرة جاهزة','Quote Ready'), a('معتمد','Approved'), a('موافقة العميل','Client approved'));
+  sbSyncReq(salesCurrentId);
+  navigate('sales');
+}
+
+function salesDecide_Revision(){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  const ta = document.getElementById('sl-revision-notes');
+  if(ta) ta.value = '';
+  const refEl = document.getElementById('sl-revision-ref');
+  if(refEl) refEl.textContent = a('طلب تعديل على التسعيرة:','Revision for:') + ' ' + r.ref;
+  const titleEl = document.getElementById('sl-revision-title');
+  if(titleEl) titleEl.textContent = '↩ ' + a('يتطلب تعديل','Needs Revision');
+  const btnEl = document.getElementById('sl-revision-confirm');
+  if(btnEl) btnEl.textContent = a('إرسال للتعديل','Send for Revision');
+  const lblEl = document.getElementById('sl-revision-lbl');
+  if(lblEl) lblEl.textContent = a('سبب التعديل المطلوب (إلزامي)','Revision reason (required)');
+  const cancelEl = document.getElementById('sl-revision-cancel');
+  if(cancelEl) cancelEl.textContent = a('إلغاء','Cancel');
+  const taEl = document.getElementById('sl-revision-notes');
+  if(taEl) taEl.placeholder = a('وضّح ما يحتاج تعديل...','Describe what needs to be revised...');
+  openM('slRevisionModal');
+}
+
+function salesDecide_ConfirmRevision(){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  const notes = (document.getElementById('sl-revision-notes')?.value || '').trim();
+  if(!notes){ alert(a('اكتب سبب التعديل المطلوب','Write the revision reason')); return; }
+  r.revisionReason = notes;
+  r.opsStatus = 'processing';
+  addHistory(r, a('التسعيرة جاهزة','Quote Ready'), a('قيد المعالجة','Processing'), a('طلب تعديل: ','Revision: ') + notes);
+  sbSyncReq(salesCurrentId);
+  closeM('slRevisionModal');
+  navigate('sales');
+}
+
+function salesDecide_Lost(){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  if(!confirm(a('تأكيد: العميل رفض العرض؟ سيُغلق الطلب كخسارة.','Confirm: client rejected? This will be marked as Lost.'))) return;
+  r.opsStatus = 'lost';
+  r.phase = 'quotation';
+  addHistory(r, a('التسعيرة جاهزة','Quote Ready'), a('مرفوض - خسارة','Lost'));
+  sbSyncReq(salesCurrentId);
+  navigate('sales');
+}
+
+function salesDecide_Cancel(){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  if(!confirm(a('إلغاء الطلب؟ لا يمكن التراجع.','Cancel this request? This cannot be undone.'))) return;
+  r.opsStatus = 'cancelled';
+  r.phase = 'quotation';
+  addHistory(r, a('التسعيرة جاهزة','Quote Ready'), a('ملغى','Cancelled'));
+  sbSyncReq(salesCurrentId);
+  navigate('sales');
+}
 
 /* ════════════════════════════════════════
    لوحة بوليصاتي (المندوب)
@@ -4143,16 +4246,29 @@ function opsTabContent(r, c){
       <div class="field-row" style="padding:0;border:none">
         <span class="field-row-label">${a('يعالجه','Handle By')}</span>
         ${isInbox ? `
-        <select id="ops-handleby-sel" onchange="opsAssignHandler(this.value)" style="font-family:var(--font);font-size:13px;border:none;border-bottom:1px solid var(--border);background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer">
-          <option value="">${a('— لم يُكلَّف بعد —','— Unassigned —')}</option>
-          ${opsEmployees.map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
-        </select>` : `<span style="font-size:13px;color:var(--text);font-weight:600">${handledUser?(lang==='ar'?handledUser.name:handledUser.nEn):a('—','—')}</span>`}
+        <div style="display:flex;align-items:center;gap:8px;flex:1">
+          <select id="ops-handleby-sel"
+            onmouseover="this.style.borderBottomColor='var(--border)'"
+            onmouseout="this.style.borderBottomColor='transparent'"
+            onfocus="this.style.borderBottomColor='var(--blue)'"
+            onblur="this.style.borderBottomColor='transparent'"
+            style="flex:1;font-family:var(--font);font-size:13px;border:none;border-bottom:1px solid transparent;background:transparent;color:var(--text);padding:4px 2px;outline:none;cursor:pointer;transition:border-color .15s">
+            <option value="">${a('— لم يُكلَّف بعد —','— Unassigned —')}</option>
+            ${opsEmployees.map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+          </select>
+          <button class="btn btn-p btn-sm" onclick="opsAssignHandler(document.getElementById('ops-handleby-sel').value)" style="white-space:nowrap">${a('تأكيد','Confirm')}</button>
+        </div>` : `<span style="font-size:13px;color:var(--text);font-weight:600">${handledUser?(lang==='ar'?handledUser.name:handledUser.nEn):a('—','—')}</span>`}
       </div>
     </div>` : `
     <div style="margin-top:18px">
       ${handledUser ? salesVRow(a('يعالجه','Handle By'), lang==='ar'?handledUser.name:handledUser.nEn) : ''}
     </div>`}
-    ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المطلوبة','Requested Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>x.id===id);return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
+    ${(r.opsStatus === 'processing' && r.revisionReason) ? `
+    <div style="margin-top:14px;padding:12px 16px;background:#fff0f0;border:1.5px solid #fca5a5;border-radius:var(--r)">
+      <div style="font-size:11px;font-weight:700;color:#b91c1c;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">⚠ ${a('سبب طلب التعديل من المبيعات','Revision Requested by Sales')}</div>
+      <div style="font-size:13px;color:#7f1d1d;line-height:1.6;white-space:pre-wrap">${r.revisionReason}</div>
+    </div>` : ''}
+    ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المطلوبة','Requested Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>String(x.id)===String(id));return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
     ${r.notes ? `<div style="margin-top:18px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:6px">${a('ملاحظات المبيعات','Sales Notes')}</div><div style="font-size:13.5px;color:var(--text);line-height:1.7;white-space:pre-wrap">${r.notes}</div></div>` : ''}`;
   }
   if(opsTab === 'quotes'){ return opsQuotesTab(r); }
@@ -4429,6 +4545,7 @@ function opsConfirmReceipt(){
 function opsMarkQuoteReady(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
+  r.revisionReason = null;
   addHistory(r, a('قيد المعالجة','Processing'), a('التسعيرة جاهزة','Quote Ready'));
   r.opsStatus = 'quote_ready';
   sbSyncReq(opsCurrentId);
@@ -10426,8 +10543,10 @@ function saveEditUser(){
   closeM('euModal');
   stTab='users'; navigate('settings');
 }
-function deleteUser(){
+async function deleteUser(){
   if(!confirm(a('حذف هذا المستخدم نهائياً؟','Delete this user permanently?'))) return;
+  const {error} = await sb.from('profiles').delete().eq('id', Number(editingUserId));
+  if(error){ alert(a('فشل الحذف: ','Delete failed: ') + error.message); return; }
   users=users.filter(x=>x.id!==editingUserId);
   closeM('euModal');
   stTab='users'; navigate('settings');
@@ -10493,7 +10612,7 @@ function stSetPageLevel(userId, pageId, level){
   if(!u) return;
   if(!u.pages || Array.isArray(u.pages)) u.pages = defaultPages(u);
   u.pages[pageId] = level;
-  sb.from('profiles').update({pages: u.pages}).eq('id', u.id);
+  sb.from('profiles').update({pages: u.pages}).eq('id', Number(u.id));
   if(curUser && curUser.id === userId) curUser.pages = u.pages;
   buildSidebar();
 }
