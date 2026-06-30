@@ -1543,6 +1543,10 @@ document.addEventListener('click', e => {
   if(panel && panel.style.display === 'block' && !e.target.closest('#notif-panel') && !e.target.closest('#notifBtn')){
     panel.style.display = 'none';
   }
+  const clientRes = document.getElementById('sl-client-results');
+  if(clientRes && clientRes.style.display === 'block' && !e.target.closest('.sl-search-wrap')){
+    clientRes.style.display = 'none';
+  }
 });
 function opsStatus(id){ return OPS_STATUSES.find(s => s.id === id) || OPS_STATUSES[0]; }
 function opsStatusLabel(id){ const s = opsStatus(id); return lang==='ar'?s.ar:s.en; }
@@ -1919,8 +1923,14 @@ async function doLogout(){
 async function loadAllData(){
   try {
     const {data:pRows} = await sb.from('profiles').select('*');
-    users = (pRows||[]).map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
-  } catch(e){ console.warn('profiles load failed', e); }
+    if(pRows && pRows.length){
+      users = pRows.map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'all', role:p.role||'employee', pages:p.pages||null}));
+      localStorage.setItem('erp_users', JSON.stringify(users));
+    }
+  } catch(e){
+    console.warn('profiles load failed', e);
+    try { const _uc=JSON.parse(localStorage.getItem('erp_users')||'null'); if(_uc&&_uc.length) users=_uc; } catch(ee){}
+  }
 
   try {
     const [{data:cRows},{data:rRows},{data:eRows}] = await Promise.all([
@@ -1948,6 +1958,8 @@ async function afterLogin(user){
   } catch(e){ console.warn('profile load failed', e); }
   try { const _sc=JSON.parse(localStorage.getItem('erp_curUser')||'null'); if(_sc&&_sc.id===String(user.id)){ if(_sc.name) curUser.name=_sc.name; if(_sc.nEn) curUser.nEn=_sc.nEn; if(_sc.user) curUser.user=_sc.user; if(_sc.dept) curUser.dept=_sc.dept; if(_sc.role) curUser.role=_sc.role; if(_sc.pages!==undefined) curUser.pages=_sc.pages; } } catch(e){}
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
+  const _cuIdx = users.findIndex(u => u.id === curUser.id);
+  if(_cuIdx >= 0){ users[_cuIdx].name=curUser.name; users[_cuIdx].nEn=curUser.nEn; users[_cuIdx].user=curUser.user; users[_cuIdx].dept=curUser.dept; users[_cuIdx].role=curUser.role; if(curUser.pages!==undefined) users[_cuIdx].pages=curUser.pages; }
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appShell').classList.add('visible');
   const _savedPage = localStorage.getItem('aman_curPage');
@@ -2509,10 +2521,8 @@ function initSales(){ if(salesMode === 'list') renderSalesList(); }
    1) قائمة الطلبات
    ════════════════════════════════════════ */
 function salesListPage(){
-  const followUps = requests.filter(r => r.status==='sent' && r.opsStatus==='sent_client').length;
   return `
   ${heading(a('المبيعات','Sales'), a('إدارة طلبات التأمين وإرسالها للأوبريشن','Manage insurance requests'))}
-  ${followUps ? `<div class="sl-followup-bar"><span class="sl-followup-dot">●</span> ${followUps} ${a('عرض أُرسل للعميل ويحتاج متابعة','quote(s) sent to client — need follow-up')}</div>` : ''}
   <div class="cc-toolbar">
     ${salesUserCanEdit(null) ? `<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>` : ''}
     <div class="srch-wr cc-search">
@@ -2884,7 +2894,7 @@ function renderSalesCards(list){
 /* اسم العميل: من جهة الاتصال المربوطة أو الاسم المحفوظ */
 function salesClientName(r){
   if(r.contactId){
-    const c = contacts.find(x => x.id === r.contactId);
+    const c = contacts.find(x => String(x.id) === String(r.contactId));
     if(c) return c.name;
   }
   return r.clientName || '';
@@ -2893,7 +2903,7 @@ function salesClientName(r){
 /* ════════════════ التنقل ════════════════ */
 function salesOpen(id){ salesCurrentId = id; salesMode = 'view'; salesTab = 'info'; navigate('sales'); }
 function salesNew(){ salesCurrentId = null; salesMode = 'edit'; salesTmpDocs = []; salesPickedContact = null; salesEditTab = 'notes'; salesTmpNotes = null; salesTmpInsurers = []; navigate('sales'); }
-function salesEdit(){ salesMode = 'edit'; const r = requests.find(x=>x.id===salesCurrentId); salesTmpDocs = r&&r.docs?[...r.docs]:[]; salesPickedContact = r?r.contactId:null; salesEditTab = 'notes'; salesTmpNotes = r?(r.notes||null):null; salesTmpInsurers = r&&r.insurers?[...r.insurers]:[]; navigate('sales'); }
+function salesEdit(){ salesMode = 'edit'; const r = requests.find(x=>x.id===salesCurrentId); salesTmpDocs = r&&r.docs?[...r.docs]:[]; salesPickedContact = r&&r.contactId ? String(r.contactId) : null; salesEditTab = 'notes'; salesTmpNotes = r?(r.notes||null):null; salesTmpInsurers = r&&r.insurers?[...r.insurers]:[]; navigate('sales'); }
 function salesBackList(){ salesMode = 'list'; salesNavTab = 'list'; salesCurrentId = null; navigate('sales'); }
 function salesBackView(){ salesMode = 'view'; navigate('sales'); }
 
@@ -2904,7 +2914,7 @@ function salesViewSheet(){
   const r = requests.find(x => x.id === salesCurrentId);
   if(!r){ salesMode='list'; return salesListPage(); }
   const st = salesStatus(r.status);
-  const c = r.contactId ? contacts.find(x => x.id === r.contactId) : null;
+  const c = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
   const clientName = salesClientName(r);
 
   return `
@@ -2966,7 +2976,7 @@ function salesViewSheet(){
 function salesViewSetTab(tab){
   salesTab = tab;
   const r = requests.find(x => x.id === salesCurrentId);
-  const c = r && r.contactId ? contacts.find(x => x.id === r.contactId) : null;
+  const c = r && r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
   document.getElementById('sales-tab-body').innerHTML = salesTabContent(r, c);
   document.querySelectorAll('.sheet-tab[data-stab]').forEach(b => b.classList.toggle('active', b.dataset.stab === tab));
 }
@@ -3001,7 +3011,6 @@ function salesTabContent(r, c){
             ? `<span style="font-size:12.5px;color:var(--text2)">${a('تتم المعالجة بواسطة:','Handled by:')} <b style="color:var(--text)">${handlerName}</b></span>`
             : `<span style="font-size:12.5px;font-weight:600;color:#b8740f">${a('بانتظار الإسناد','Awaiting Assignment')}</span>`}
         </div>
-        ${r.opsStatus==='quote_ready' ? `<div style="margin-top:8px;padding:8px 12px;background:#e0f7fa;border-radius:8px;font-size:12.5px;font-weight:700;color:#0e7490">⚡ ${a('التسعيرة جاهزة — خذ قرارك من الأزرار أعلى الصفحة','Quote is ready — use the buttons above to decide')}</div>` : ''}
         ${recentHistory.length ? `<div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;margin-top:10px">
           ${recentHistory.map(h=>`<div style="display:flex;align-items:baseline;gap:10px;font-size:11.5px;color:var(--text2)">
             <span dir="ltr" style="width:90px;min-width:90px;color:var(--text3);white-space:nowrap;font-family:'Inter',sans-serif;font-size:11px">${h.at}</span>
@@ -3109,7 +3118,7 @@ function salesEditSheet(){
   const r = salesCurrentId ? requests.find(x => x.id === salesCurrentId) : null;
   const v = (f, d='') => r ? (r[f]||d) : d;
   const isNew = !r;
-  const pickedC = salesPickedContact ? contacts.find(c => c.id === salesPickedContact) : null;
+  const pickedC = salesPickedContact ? contacts.find(c => String(c.id) === salesPickedContact) : null;
   const clients = contacts.filter(c => c.cat === 'client');
 
   return `
@@ -3292,8 +3301,8 @@ function salesEditTabContent(r){
 }
 
 function salesPickContact(id){
-  salesPickedContact = id ? parseInt(id) : null;
-  const c = salesPickedContact ? contacts.find(x => x.id === salesPickedContact) : null;
+  salesPickedContact = id ? String(id) : null;
+  const c = salesPickedContact ? contacts.find(x => String(x.id) === salesPickedContact) : null;
   // نملأ حقل البحث باسم العميل ونخفي النتائج
   const sb = document.getElementById('sl-client-search');
   if(sb && c) sb.value = c.name;
@@ -3320,17 +3329,14 @@ function salesClientSearch(q){
           ${c.idnum?`<div style="font-size:11.5px;color:var(--text3)" dir="ltr">${a('سجل','CR')}: ${c.idnum}</div>`:''}
         </div>
       </div>`).join('');
+  } else {
+    html += `<div style="padding:12px;text-align:center;color:var(--text3);font-size:12.5px">${a('لا يوجد عملاء مطابقين','No matching clients')}</div>`;
   }
-  // خيار إضافة جديد (نمط أودو) — يظهر دايماً لو فيه نص، أو لو ما فيه نتائج
-  if(q){
-    html += `
-      <div class="sl-result-add" onclick="salesNewClient('${q.replace(/'/g,"")}')">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        ${a('إضافة','Create')} "<b>${q}</b>" ${a('كعميل جديد','as new client')}
-      </div>`;
-  } else if(!matches.length){
-    html += `<div style="padding:12px;text-align:center;color:var(--text3);font-size:12.5px">${a('لا يوجد عملاء','No clients')}</div>`;
-  }
+  html += `
+    <div class="sl-result-add" onclick="salesNewClient('${q.replace(/'/g,'')}')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      ${q ? `${a('إضافة','Create')} "<b>${q}</b>" ${a('كعميل جديد','as new client')}` : a('+ إضافة عميل جديد','+ Add new client')}
+    </div>`;
   res.innerHTML = html;
   res.style.display = 'block';
 }
@@ -3364,7 +3370,7 @@ function salesNewClient(prefillName){
     lockCat:  true,
     prefill:  prefillName || '',
     returnTo: 'sales',
-    onSaved:  (id) => { salesPickedContact = id; },
+    onSaved:  (id) => { salesPickedContact = id ? String(id) : null; },
   });
 }
 
@@ -3372,7 +3378,7 @@ function salesSaveNewClient(){
   const name = (document.getElementById('scq-name')?.value || '').trim();
   if(!name){ alert(a('اسم العميل مطلوب','Client name is required')); return; }
   const newC = {
-    id: Date.now(),
+    id: String(Date.now()),
     name,
     kind: 'company',
     cat: 'client',
@@ -3385,7 +3391,7 @@ function salesSaveNewClient(){
   contacts.push(newC);
   salesPickedContact = newC.id;
   closeM('slClientModal');
-  const c = contacts.find(x => x.id === salesPickedContact);
+  const c = contacts.find(x => String(x.id) === salesPickedContact);
   const prev = document.getElementById('sl-client-preview');
   if(prev) prev.innerHTML = salesClientPreview(c);
 }
@@ -3460,7 +3466,7 @@ async function salesSave(){
   const g = id => (document.getElementById(id)?.value || '').trim();
   const r = salesCurrentId ? requests.find(x => x.id === salesCurrentId) : null;
   const cleanDocs = salesTmpDocs.filter(d => (d.name||'').trim());
-  const c = salesPickedContact ? contacts.find(x => x.id === salesPickedContact) : null;
+  const c = salesPickedContact ? contacts.find(x => String(x.id) === salesPickedContact) : null;
   const notesEl = document.getElementById('sl-notes');
   const notesVal = notesEl ? notesEl.value.trim() : (salesTmpNotes || '');
   const d = {
@@ -4234,7 +4240,7 @@ function opsViewSheet(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r){ opsMode='list'; return opsListPage(); }
   const st = opsStatus(r.opsStatus||'inbox');
-  const c = r.contactId ? contacts.find(x => x.id === r.contactId) : null;
+  const c = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
 
   return `
   <div class="sheet-bar">
@@ -4308,7 +4314,7 @@ function opsViewSheet(){
 function opsSetTab(tab){
   opsTab = tab;
   const r = requests.find(x => x.id === opsCurrentId);
-  const c = r && r.contactId ? contacts.find(x => x.id === r.contactId) : null;
+  const c = r && r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
   document.getElementById('ops-tab-body').innerHTML = opsTabContent(r, c);
   document.querySelectorAll('.sheet-tab[data-otab]').forEach(b => b.classList.toggle('active', b.dataset.otab === tab));
 }
@@ -10638,6 +10644,7 @@ async function saveEditUser(){
   if(np) u.pass=np;
   u.dept=document.getElementById('eu-dept').value;
   u.role=document.getElementById('eu-role').value;
+  localStorage.setItem('erp_users', JSON.stringify(users));
   if(curUser && editingUserId === curUser.id){
     curUser.name = u.name; curUser.nEn = u.nEn;
     curUser.user = u.user; curUser.dept = u.dept; curUser.role = u.role;
