@@ -1497,6 +1497,11 @@ function addNotif(targetUser, text, type){
   }
 }
 
+function sendSystemNotification(receiverId, messageText, type){
+  if(!receiverId || !messageText) return;
+  addNotif(receiverId, messageText, type || 'info');
+}
+
 function myNotifs(){
   return curUser ? notifications.filter(n => n.to === curUser.user).sort((a,b) => b.id - a.id) : [];
 }
@@ -3626,6 +3631,7 @@ function salesSendToOps(){
   r.opsStatus = 'inbox';
   addHistory(r, a('مكتمل','Ready'), a('مُرسل للأوبريشن','Sent to Ops'));
   sbSyncReq(salesCurrentId);
+  sendSystemNotification(r.assignedTo, a('تم إرسال طلبك للأوبريشن — الطلب: ','Your request was sent to Operations — ref: ') + r.ref, 'info');
   navigate('sales');
 }
 
@@ -3706,6 +3712,7 @@ function salesConfirmApproval(){
   r.phase = 'execution';
   addHistory(r, a('أُرسل للعميل','Sent to Client'), a('معتمد','Approved'), a('موافقة العميل','Client approved'));
   sbSyncReq(salesCurrentId);
+  if(r.handledBy) sendSystemNotification(r.handledBy, a('اعتمد العميل العرض — الطلب: ','Client approved the quote — ref: ') + r.ref + a(' · جاهز للتنفيذ',' · ready for execution'), 'success');
   closeM('slApproveModal');
   alert(a('تم اعتماد العرض ✓\nانتقل الطلب لمرحلة التنفيذ','Quote approved ✓\nMoved to execution phase'));
   navigate('sales');
@@ -3747,6 +3754,7 @@ function salesConfirmReturn(){
   r.opsStatus = 'pricing';
   r.phase = 'quotation';
   sbSyncReq(salesCurrentId);
+  if(r.handledBy) sendSystemNotification(r.handledBy, a('طلب تعديل على التسعيرة — الطلب: ','Revision requested on quote — ref: ') + r.ref + ' · ' + notes, 'warning');
   closeM('slReturnModal');
   alert(a('تم إرجاع الطلب للأوبريشن ✓','Returned to Operations ✓'));
   navigate('sales');
@@ -4312,6 +4320,7 @@ function opsAssignHandler(userVal){
     r.opsStatus = 'inbox';
   }
   sbSyncReq(opsCurrentId);
+  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info');
   const lbl = document.querySelector('#ops-handleby-sel');
   if(lbl) lbl.style.borderBottomColor = userVal ? 'var(--success)' : 'var(--border)';
 }
@@ -4329,6 +4338,7 @@ function opsAssignFromList(requestId, userVal){
     r.opsStatus = 'inbox';
   }
   sbSyncReq(requestId);
+  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info');
   renderOpsList();
 }
 
@@ -4736,7 +4746,7 @@ function opsConfirmReceipt(){
   addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('قيد المعالجة','Processing'));
   r.opsStatus = 'processing';
   sbSyncReq(opsCurrentId);
-  addNotif(r.assignedTo, a('بدأ معالجة طلبك — الطلب: ','Your request is now being processed — ref: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('بدأ معالجة طلبك — الطلب: ','Your request is now being processed — ref: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsMarkQuoteReady(){
@@ -4746,7 +4756,7 @@ function opsMarkQuoteReady(){
   addHistory(r, a('قيد المعالجة','Processing'), a('التسعيرة جاهزة','Quote Ready'));
   r.opsStatus = 'quote_ready';
   sbSyncReq(opsCurrentId);
-  addNotif(r.assignedTo, a('التسعيرة جاهزة للمراجعة — الطلب: ','Quote ready for your review — request: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('التسعيرة جاهزة للمراجعة — الطلب: ','Quote ready for your review — request: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsStartPricing(){
@@ -4755,7 +4765,7 @@ function opsStartPricing(){
   addHistory(r, opsStatusLabel(r.opsStatus||'inbox'), a('قيد التسعير','Pricing'));
   r.opsStatus = 'pricing';
   sbSyncReq(opsCurrentId);
-  addNotif(r.assignedTo, a('بدأ تسعير طلبك — الطلب: ','Pricing has started for your request — ref: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('بدأ تسعير طلبك — الطلب: ','Pricing has started for your request — ref: ') + r.ref, 'info');
   navigate('operations');
 }
 function opsSendToClient(){
@@ -4767,7 +4777,7 @@ function opsSendToClient(){
   r.opsStatus = 'sent_client';
   r.phase = 'quotation';
   sbSyncReq(opsCurrentId);
-  addNotif(r.assignedTo, a('تم إرسال العرض للعميل — الطلب: ','Quote sent to client — request: ') + r.ref + a(' · يرجى المتابعة مع العميل',' · please follow up with client'), 'success');
+  sendSystemNotification(r.assignedTo, a('تم إرسال العرض للعميل — الطلب: ','Quote sent to client — request: ') + r.ref + a(' · يرجى المتابعة مع العميل',' · please follow up with client'), 'success');
   navigate('operations');
 }
 function opsStartExecution(){
@@ -4777,6 +4787,7 @@ function opsStartExecution(){
   r.opsStatus = 'executing';
   r.phase = 'execution';
   sbSyncReq(opsCurrentId);
+  sendSystemNotification(r.assignedTo, a('انتقل طلبك لمرحلة التنفيذ — الطلب: ','Your request moved to execution phase — ref: ') + r.ref, 'info');
   opsTab = 'execution';
   navigate('operations');
 }
@@ -4788,7 +4799,7 @@ function opsIssuePolicy(){
   addHistory(r, a('قيد التنفيذ','Executing'), a('صدرت الوثيقة','Policy Issued'));
   r.opsStatus = 'issued';
   sbSyncReq(opsCurrentId);
-  addNotif(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success');
+  sendSystemNotification(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success');
   navigate('operations');
 }
 function opsMarkDone(){
@@ -4801,16 +4812,23 @@ function opsMarkDone(){
   const ex = r.execution || {};
   const commAmt = parseFloat(ex.commissionAmt) || 0;
   if(commAmt > 0){
+    const vatAmt   = Math.round(commAmt * 0.15 * 100) / 100;
+    const iaFee    = Math.round(commAmt * 0.01 * 100) / 100;
+    const grossRec = Math.round((commAmt + vatAmt) * 100) / 100;
     const desc = a('عمولة وثيقة: ','Commission — policy: ') + (ex.policyNumber||r.ref);
     journalEntries.push({
       id: Date.now(), ref: nextJvRef(), date: new Date().toISOString().slice(0,10),
       desc, posted: true, reqRef: r.ref,
       lines:[
-        {account:'1104', debit: commAmt, credit: 0, contactId: r.contactId||null},
-        {account:'4101', debit: 0, credit: commAmt, contactId: r.contactId||null},
+        {account:'1104', debit: grossRec, credit: 0,       contactId: r.contactId||null},
+        {account:'4101', debit: 0,        credit: commAmt, contactId: r.contactId||null},
+        {account:'2102', debit: 0,        credit: vatAmt,  contactId: r.contactId||null},
+        {account:'6303', debit: iaFee,    credit: 0,       contactId: r.contactId||null},
+        {account:'2103', debit: 0,        credit: iaFee,   contactId: r.contactId||null},
       ]
     });
   }
+  sendSystemNotification(r.assignedTo, a('اكتمل طلبك — الوثيقة أُرسلت للمبيعات: ','Your request is complete — policy sent to sales: ') + r.ref, 'success');
   navigate('operations');
 }
 
@@ -4904,6 +4922,7 @@ function opsConfirmReject(){
   if(!r.revisions) r.revisions = [];
   r.revisions.push({ reason: 'rejected', notes: reason, by: curUser?.name||'—', at: new Date().toISOString().slice(0,10) });
   sbSyncReq(opsCurrentId);
+  sendSystemNotification(r.assignedTo, a('رُفض طلبك وأُعيد للمبيعات — الطلب: ','Your request was rejected and returned to Sales — ref: ') + r.ref + ' · ' + a('السبب: ','Reason: ') + reason, 'warning');
   closeM('opsRejectModal');
   alert(a('تم رفض الطلب وإرجاعه للمبيعات ✓','Request rejected and returned to Sales ✓'));
   opsMode = 'list'; opsCurrentId = null;
@@ -6093,6 +6112,7 @@ let chartAccounts = [
   /* 63xx — مصاريف مالية */
   {id:'6301', code:'6301', name:'عمولات بنكية',        nameEn:'Bank Charges',             type:'financial',  active:true},
   {id:'6302', code:'6302', name:'فوائد قروض',          nameEn:'Loan Interest',            type:'financial',  active:true},
+  {id:'6303', code:'6303', name:'رسوم هيئة التأمين',   nameEn:'IA Fees Expense',          type:'financial',  active:true},
   /* 70xx — إيرادات */
   {id:'7001', code:'7001', name:'عمولة تأمين المركبات',  nameEn:'Motor Insurance Comm.',    type:'revenue',    active:true},
   {id:'7002', code:'7002', name:'عمولة تأمين الصحة',    nameEn:'Health Insurance Comm.',   type:'revenue',    active:true},
