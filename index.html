@@ -69,6 +69,7 @@
 [data-theme="dark"] .bg-red{background:#7f1d1d44;color:#fca5a5}
 [data-theme="dark"] .bg-gray{background:#374151;color:#d1d5db}
 [data-theme="dark"] .bg-purple{background:#4c1d9544;color:#c4b5fd}
+[data-theme="dark"] .bg-danger{background:#7f1d1d44;color:#fca5a5}
 [data-theme="dark"] .bg-teal{background:rgba(14,116,144,.2);color:#67e8f9;}
 .bg-teal{background:#cffafe;color:#0e7490;}
 
@@ -219,6 +220,7 @@ tbody td{padding:9px 13px;font-size:12px;color:var(--text);}
 .bg-blue{background:#dbeafe;color:#1d4ed8} .bg-green{background:#d1fae5;color:#065f46}
 .bg-yellow{background:#fef3c7;color:#92400e} .bg-red{background:#fee2e2;color:#991b1b}
 .bg-gray{background:#f3f4f6;color:#374151} .bg-purple{background:#ede9fe;color:#5b21b6}
+.bg-danger{background:#fee2e2;color:#dc2626}
 
 /* شارة المرحلة */
 .stg-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:4px;font-size:11.5px;font-weight:700;}
@@ -1565,6 +1567,7 @@ const SALES_STATUSES = [
   {id:'draft',  ar:'مسودة',           en:'Draft',  color:'#64748b', cls:'bg-gray'},
   {id:'ready',  ar:'مكتمل',           en:'Ready',  color:'#1e4d8c', cls:'bg-blue'},
   {id:'sent',   ar:'مُرسل للأوبريشن',  en:'Sent',   color:'#1e7a52', cls:'bg-green'},
+  {id:'lost',   ar:'خسارة',           en:'Lost',   color:'#dc2626', cls:'bg-danger'},
 ];
 function salesStatus(id){ return SALES_STATUSES.find(s => s.id === id) || SALES_STATUSES[0]; }
 function salesStatusLabel(id){ const s = salesStatus(id); return lang==='ar'?s.ar:s.en; }
@@ -2246,6 +2249,9 @@ function isSalesMgr(){ return curUser && curUser.role==='manager' && curUser.dep
 function isSalesEmp(){ return curUser && curUser.role==='employee' && curUser.dept==='sales'; }
 function isOpsMgr(){   return curUser && curUser.role==='manager' && curUser.dept==='operations'; }
 function isOpsEmp(){   return curUser && curUser.role==='employee' && curUser.dept==='operations'; }
+function isFinUser(){  return curUser && curUser.dept === 'finance'; }
+function isFinMgr(){   return curUser && curUser.role==='manager' && curUser.dept==='finance'; }
+function isOpsUser(){  return curUser && curUser.dept === 'operations'; }
 
 /* هل يقدر المستخدم الحالي يعدّل على طلب مبيعات معيّن؟ */
 function salesUserCanEdit(r){
@@ -3327,6 +3333,8 @@ function salesViewSheet(){
         <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ ${a('رفض - خسارة','Lost')}</button>
       ` : ''}
       ${salesUserCanEdit(r) ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
+      ${r.status !== 'lost' && r.opsStatus !== 'done' && (curUser?.role==='superadmin'||isSalesMgr()||isSalesEmp()) ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5" onclick="showMarkAsLostModal('${r.id}','sales')">✕ ${a('تسجيل كخسارة','Mark as Lost')}</button>` : ''}
+      ${r.status === 'lost' ? `<span style="padding:5px 12px;border-radius:99px;font-size:12px;font-weight:700;background:#fee2e2;color:#dc2626">✕ ${a('مُسجَّل كخسارة','Marked Lost')}</span>` : ''}
     </div>
   </div>
 
@@ -4540,6 +4548,7 @@ function slsMarkInstPaid(reqId, instIdx){
    ════════════════════════════════════════════════ */
 let opsMode = 'list', opsCurrentId = null, opsTab = 'info', opsFilter = 'all', opsView = 'cards';
 let opsShowUnassigned = false;
+let opsListTab = 'active';
 function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
 let opsCols = {client:true,salesRep:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
 let opsSortDir = 'desc';
@@ -4550,20 +4559,42 @@ function pgOps(){
 }
 function initOps(){ if(opsMode === 'list') renderOpsList(); }
 
-/* الطلبات الواردة للأوبريشن = المرسلة من المبيعات (status === 'sent') */
-function opsRequests(){
-  const all = requests.filter(r => r.status === 'sent');
-  if(!curUser || curUser.role==='superadmin' || isOpsMgr()) return all;
+/* الطلبات الواردة للأوبريشن — مقسّمة حسب تبويب القائمة */
+function opsRequestsAll(){
+  const all = requests.filter(r => r.status === 'sent' || r.status === 'lost');
+  if(!curUser || curUser.role==='superadmin' || isOpsMgr() || isFinUser()) return all;
   if(isOpsEmp()) return all.filter(r => r.handledBy === curUser.user);
   return all;
 }
+function opsRequests(){
+  const all = opsRequestsAll();
+  if(opsListTab === 'archive') return all.filter(r => r.status === 'lost' || r.opsStatus === 'done');
+  if(opsListTab === 'issuance') return all.filter(r => r.status === 'sent' && ['executing','issued'].includes(r.opsStatus));
+  return all.filter(r => r.status === 'sent' && !['done'].includes(r.opsStatus));
+}
+function opsSetListTab(t){ opsListTab=t; opsFilter='all'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
 
 /* ════════════════════════════════════════
    1) قائمة الطلبات الواردة
    ════════════════════════════════════════ */
 function opsListPage(){
+  const allR = opsRequestsAll();
+  const cntActive   = allR.filter(r => r.status==='sent' && !['done'].includes(r.opsStatus)).length;
+  const cntIssuance = allR.filter(r => r.status==='sent' && ['executing','issued'].includes(r.opsStatus)).length;
+  const cntArchive  = allR.filter(r => r.status==='lost' || r.opsStatus==='done').length;
   return `
   ${heading(a('الأوبريشن','Operations'), a('معالجة الطلبات الواردة وعروض الأسعار','Process incoming requests & quotes'))}
+  <div style="display:flex;gap:2px;padding:0 0 0 0;margin-bottom:12px;border-bottom:2px solid var(--border);overflow-x:auto">
+    <button onclick="opsSetListTab('active')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='active'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='active'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
+      ${a('الطلبات النشطة','Active Requests')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='active'?'var(--blue)':'var(--bg)'};color:${opsListTab==='active'?'#fff':'var(--text3)'};">${cntActive}</span>
+    </button>
+    <button onclick="opsSetListTab('issuance')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='issuance'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='issuance'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
+      ${a('تحت الإصدار','Under Issuance')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='issuance'?'var(--blue)':'var(--bg)'};color:${opsListTab==='issuance'?'#fff':'var(--text3)'};">${cntIssuance}</span>
+    </button>
+    <button onclick="opsSetListTab('archive')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='archive'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='archive'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
+      ${a('الأرشيف','Archive')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='archive'?'var(--blue)':'var(--bg)'};color:${opsListTab==='archive'?'#fff':'var(--text3)'};">${cntArchive}</span>
+    </button>
+  </div>
   <div class="cc-toolbar">
     <div class="srch-wr cc-search">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -4937,10 +4968,15 @@ function opsAssignFromList(requestId, userVal){
 function opsViewSheet(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r){ opsMode='list'; return opsListPage(); }
-  const st = opsStatus(r.opsStatus||'inbox');
+  const isLost = r.status === 'lost';
+  const st = isLost ? {color:'#dc2626',cls:'bg-danger'} : opsStatus(r.opsStatus||'inbox');
   const c = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
 
   return `
+  ${isLost ? `<div style="padding:10px 18px;background:#fee2e2;border-bottom:2px solid #fca5a5;font-size:12.5px;color:#dc2626;font-weight:700;display:flex;align-items:center;gap:10px">
+    ✕ ${a('مُسجَّل كخسارة','Marked as Lost')} — ${a('السبب:','Reason:')} ${r.lostReasonLabel||r.lostReason||'—'}
+    ${r.lostNote ? ` — ${r.lostNote}` : ''}
+  </div>` : ''}
   <div class="sheet-bar">
     <div class="sheet-bar-l">
       <button class="btn btn-o btn-sm" onclick="opsBackList()">
@@ -4964,7 +5000,9 @@ function opsViewSheet(){
         ${(r.opsStatus)==='ready_to_send' ? `<span class="ops-wait-badge">${a('جاهز — بانتظار المندوب','Ready — awaiting sales')}</span>` : ''}
         ${(r.opsStatus)==='approved' ? `<button class="btn btn-p btn-sm" onclick="opsStartExecution()">${a('بدء التنفيذ','Start Execution')}</button>` : ''}
         ${(r.opsStatus)==='executing' ? `<button class="btn btn-p btn-sm" onclick="opsIssuePolicy()">${a('إصدار الوثيقة','Issue Policy')}</button>` : ''}
-        ${(r.opsStatus)==='issued' ? `<button class="btn btn-p btn-sm" onclick="opsSendToSales()">${a('إرسال للمبيعات ✓','Send to Sales ✓')}</button>` : ''}`;
+        ${(r.opsStatus)==='issued' ? `<button class="btn btn-p btn-sm" onclick="opsSendToSales()">${a('إرسال للمبيعات ✓','Send to Sales ✓')}</button>` : ''}
+        ${r.status !== 'lost' && r.opsStatus !== 'done' && (curUser?.role==='superadmin'||isOpsMgr()||isSalesEmp()||isSalesMgr()) ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5" onclick="showMarkAsLostModal('${r.id}','ops')">✕ ${a('تسجيل كخسارة','Mark as Lost')}</button>` : ''}
+        ${r.status === 'lost' ? `<span style="padding:5px 12px;border-radius:99px;font-size:12px;font-weight:700;background:#fee2e2;color:#dc2626">✕ ${a('مُسجَّل كخسارة','Marked Lost')}</span>` : ''}`;
       })()}
     </div>
   </div>
@@ -4977,7 +5015,7 @@ function opsViewSheet(){
       <div class="sheet-head-main">
         <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-bottom:8px">
           <span style="font-size:24px;font-weight:800;color:var(--text);font-family:'Inter',sans-serif">${r.ref}</span>
-          ${badge(st.cls, opsStatusLabel(r.opsStatus||'inbox'))}
+          ${isLost ? badge('bg-danger', a('خسارة','Lost')) : badge(st.cls, opsStatusLabel(r.opsStatus||'inbox'))}
         </div>
         <div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:4px">${salesClientName(r)||a('بدون عميل','No client')}</div>
         <div style="font-size:13px;color:var(--text2)">${insTypeLabel(r.insType)}</div>
@@ -5088,24 +5126,40 @@ function opsTabContent(r, c){
   if(opsTab === 'quotes'){ return opsQuotesTab(r); }
   if(opsTab === 'execution'){
     const ex = r.execution || {};
-    const canEdit = ['executing','issued','done'].includes(r.opsStatus);
-    if(!canEdit) return `<div style="text-align:center;padding:40px;color:var(--text3);font-size:13px">${a('يتوفر بعد بدء التنفيذ','Available after execution starts')}</div>`;
+    const canEditEx = ['executing','issued','done'].includes(r.opsStatus);
+    if(!canEditEx) return `<div style="text-align:center;padding:40px;color:var(--text3);font-size:13px">${a('يتوفر بعد بدء التنفيذ','Available after execution starts')}</div>`;
+    const showComm = !isOpsEmp();
+    const finReadOnly = isFinUser() && !isFinMgr() && curUser?.role!=='superadmin';
+    const fieldAttr = finReadOnly ? 'readonly style="background:var(--bg);color:var(--text2)"' : '';
     return `
     <div class="field-grid">
+      <div class="field-row"><span class="field-row-label">${a('شركة التأمين','Insurer')}</span>
+        <input id="ex-insurer" class="fi" dir="ltr" value="${ex.insurer||''}" placeholder="${a('اسم شركة التأمين','Insurer name')}" ${fieldAttr} onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('رقم الوثيقة','Policy Number')}</span>
-        <input id="ex-polno" class="fi" dir="ltr" value="${ex.policyNumber||''}" placeholder="${a('أدخل رقم الوثيقة','Enter policy number')}" onchange="opsSaveExecution()"></div>
+        <input id="ex-polno" class="fi" dir="ltr" value="${ex.policyNumber||''}" placeholder="${a('أدخل رقم الوثيقة','Enter policy number')}" ${fieldAttr} onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('بداية الوثيقة','Policy Start')}</span>
-        <input type="date" id="ex-start" dir="ltr" value="${ex.policyStart||''}" onchange="opsSaveExecution()"></div>
+        <input type="date" id="ex-start" dir="ltr" value="${ex.policyStart||''}" ${fieldAttr} onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('نهاية الوثيقة','Policy End')}</span>
-        <input type="date" id="ex-end" dir="ltr" value="${ex.policyEnd||''}" onchange="opsSaveExecution()"></div>
+        <input type="date" id="ex-end" dir="ltr" value="${ex.policyEnd||''}" ${fieldAttr} onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('القسط النهائي','Final Premium')}</span>
-        <input id="ex-premium" dir="ltr" type="number" step="0.01" value="${ex.finalPremium||''}" placeholder="0.00" oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
+        <input id="ex-premium" dir="ltr" type="number" step="0.01" value="${ex.finalPremium||''}" placeholder="0.00" ${fieldAttr} oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
+      <div class="field-row"><span class="field-row-label">${a('طريقة الدفع','Payment Method')}</span>
+        <select id="ex-paymethod" class="fi" ${fieldAttr} onchange="opsSaveExecution()">
+          <option value="">${a('اختر طريقة الدفع','Select payment method')}</option>
+          <option value="full"     ${(ex.paymentMethod==='full')?'selected':''}>${a('دفعة كاملة','Full Payment')}</option>
+          <option value="quarterly"${(ex.paymentMethod==='quarterly')?'selected':''}>${a('دفعات ربع سنوية','Quarterly')}</option>
+          <option value="semi"     ${(ex.paymentMethod==='semi')?'selected':''}>${a('دفعات نصف سنوية','Semi-Annual')}</option>
+          <option value="custom"   ${(ex.paymentMethod==='custom')?'selected':''}>${a('دفعات مخصصة','Custom')}</option>
+        </select>
+      </div>
+      ${showComm ? `
       <div class="field-row"><span class="field-row-label">${a('نسبة العمولة %','Commission %')}</span>
-        <input id="ex-commpct" dir="ltr" type="number" step="0.01" value="${ex.commissionPct||''}" placeholder="0.00" oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
+        <input id="ex-commpct" dir="ltr" type="number" step="0.01" value="${ex.commissionPct||''}" placeholder="0.00" ${fieldAttr} oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('مبلغ العمولة (تلقائي)','Commission Amt (auto)')}</span>
         <input id="ex-commamt" dir="ltr" type="number" step="0.01" value="${ex.commissionAmt||''}" placeholder="0.00" style="background:var(--bg);color:var(--text3)" readonly></div>
+      ` : ''}
     </div>
-    ${(()=>{
+    ${showComm ? (()=>{
       const prem = parseFloat(ex.finalPremium||0);
       const pct  = parseFloat(ex.commissionPct||0);
       if(prem>0 && pct>0){
@@ -5124,8 +5178,11 @@ function opsTabContent(r, c){
         </div>`;
       }
       return '';
-    })()}
-    <button class="btn btn-p btn-sm" style="margin-top:14px" onclick="opsSaveExecution(true)">${a('حفظ بيانات الوثيقة','Save Policy Data')}</button>`;
+    })() : ''}
+    ${!finReadOnly ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn btn-p btn-sm" onclick="opsSaveExecution(true)">${a('حفظ بيانات الوثيقة','Save Policy Data')}</button>
+      <button class="btn btn-o btn-sm" onclick="opsAutoGenInstallments()">${a('توليد جدول الدفعات تلقائياً','Auto-Generate Schedule')}</button>
+    </div>` : ''}`;
   }
   if(opsTab === 'invoice'){
     const inv = r.invoice || {};
@@ -5179,12 +5236,23 @@ function opsTabContent(r, c){
               <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('المبلغ','Amount')}</th>
               <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('تاريخ الاستحقاق','Due Date')}</th>
               <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('الحالة','Status')}</th>
+              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('تحصيل','Collect')}</th>
               <th style="padding:8px 4px;border-bottom:1px solid var(--border)"></th>
             </tr></thead>
             <tbody>
-              ${inst.map((x,i)=>`
-              <tr style="border-bottom:1px solid var(--border)">
-                <td style="padding:8px 12px;font-size:12.5px;font-weight:700;color:var(--text2)">${i+1}</td>
+              ${inst.map((x,i)=>{
+                const today = new Date().toISOString().slice(0,10);
+                const due = x.dueDate || '';
+                const isPaid = x.status === 'paid';
+                const isOverdue = !isPaid && due && due < today;
+                const isSoon = !isPaid && !isOverdue && due && due <= new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+                const dotColor = isPaid ? '#16a34a' : isOverdue ? '#dc2626' : isSoon ? '#d97706' : '#94a3b8';
+                const dotTitle = isPaid ? a('مدفوع','Paid') : isOverdue ? a('متأخر','Overdue') : isSoon ? a('مستحق قريباً','Due soon') : a('قادم','Upcoming');
+                return `
+              <tr style="border-bottom:1px solid var(--border);background:${isOverdue&&!isPaid?'#fff5f5':isSoon&&!isPaid?'#fffbeb':''}">
+                <td style="padding:8px 12px;font-size:12.5px;font-weight:700;color:var(--text2)">
+                  <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-inline-end:6px" title="${dotTitle}"></span>${i+1}
+                </td>
                 <td style="padding:6px 12px">
                   <input class="fi" type="number" step="0.01" dir="ltr" value="${x.amount||''}" placeholder="0.00"
                     style="width:110px;height:30px;font-size:12px"
@@ -5196,9 +5264,15 @@ function opsTabContent(r, c){
                     onchange="opsUpdateInst(${i},'dueDate',this.value)"/>
                 </td>
                 <td style="padding:8px 12px">
-                  <span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${x.status==='paid'?'#dcfce7':'#fef3c7'};color:${x.status==='paid'?'#16a34a':'#b45309'}">
-                    ${x.status==='paid'?a('مدفوع','Paid'):a('معلّق','Pending')}
+                  <span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${isPaid?'#dcfce7':isOverdue?'#fee2e2':isSoon?'#fef3c7':'#f1f5f9'};color:${isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#b45309':'#64748b'}">
+                    ${isPaid?a('محصَّل','Collected'):isOverdue?a('متأخر','Overdue'):isSoon?a('مستحق قريباً','Due Soon'):a('قادم','Upcoming')}
                   </span>
+                </td>
+                <td style="padding:6px 12px">
+                  ${isPaid
+                    ? `<button onclick="opsMarkInstPaid(${i},false)" style="border:1.5px solid #86efac;background:#dcfce7;color:#15803d;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">✓ ${a('تم','Done')}</button>`
+                    : `<button onclick="opsMarkInstPaid(${i},true)" style="border:1.5px solid var(--border);background:var(--white);color:var(--text2);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">${a('تأكيد التحصيل','Mark Collected')}</button>`
+                  }
                 </td>
                 <td style="padding:6px 4px;text-align:center">
                   <button onclick="opsRemoveInstallment(${i})"
@@ -5207,7 +5281,7 @@ function opsTabContent(r, c){
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
                   </button>
                 </td>
-              </tr>`).join('')}
+              </tr>`;}).join('')}
             </tbody>
           </table>`}
         </div>
@@ -5601,6 +5675,67 @@ function opsSendToSales(){
   opsMarkDone();
 }
 
+/* ════ Mark as Lost / Archive ════ */
+const LOST_REASONS = [
+  {id:'price_high',  ar:'السعر مرتفع',                    en:'Price too high'},
+  {id:'direct',      ar:'تم التأمين مباشرة مع الشركة',    en:'Client insured directly'},
+  {id:'no_response', ar:'العميل لم يستجب',                 en:'Client did not respond'},
+  {id:'other',       ar:'أخرى',                           en:'Other'},
+];
+function showMarkAsLostModal(reqId, source){
+  const existing = document.getElementById('mark-lost-modal');
+  if(existing) existing.remove();
+  const html = `
+  <div id="mark-lost-modal" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;background:#0006;backdrop-filter:blur(2px)">
+    <div style="background:var(--white);border-radius:16px;padding:28px;width:420px;max-width:95vw;box-shadow:0 24px 64px #0004">
+      <div style="font-size:16px;font-weight:800;color:var(--text);margin-bottom:6px">✕ ${a('تسجيل كخسارة','Mark as Lost')}</div>
+      <div style="font-size:12.5px;color:var(--text3);margin-bottom:20px">${a('سيُنقل الطلب فوراً إلى الأرشيف ويتوقف أثره المالي.','The request will be moved to archive and all financial effects will stop.')}</div>
+      <div style="margin-bottom:14px">
+        <label style="font-size:12px;font-weight:700;color:var(--text2);display:block;margin-bottom:6px">${a('سبب الخسارة *','Loss Reason *')}</label>
+        <select id="lost-reason-sel" class="fi" style="width:100%;height:38px">
+          <option value="">${a('اختر السبب...','Select reason...')}</option>
+          ${LOST_REASONS.map(r=>`<option value="${r.id}">${lang==='ar'?r.ar:r.en}</option>`).join('')}
+        </select>
+      </div>
+      <div id="lost-other-wrap" style="display:none;margin-bottom:14px">
+        <label style="font-size:12px;font-weight:700;color:var(--text2);display:block;margin-bottom:6px">${a('تفاصيل إضافية','Additional details')}</label>
+        <textarea id="lost-note" class="fta" style="width:100%;height:70px;resize:none" placeholder="${a('اكتب تفاصيل...','Write details...')}"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-o btn-sm" onclick="document.getElementById('mark-lost-modal').remove()">${a('إلغاء','Cancel')}</button>
+        <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" onclick="confirmMarkAsLost('${reqId}','${source}')">${a('تأكيد الخسارة','Confirm Loss')}</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  const sel = document.getElementById('lost-reason-sel');
+  if(sel) sel.addEventListener('change', () => {
+    const w = document.getElementById('lost-other-wrap');
+    if(w) w.style.display = sel.value === 'other' ? 'block' : 'none';
+  });
+}
+function confirmMarkAsLost(reqId, source){
+  const reason = document.getElementById('lost-reason-sel')?.value || '';
+  if(!reason){ alert(a('يجب اختيار سبب الخسارة','Please select a loss reason')); return; }
+  const note = (document.getElementById('lost-note')?.value || '').trim();
+  const r = requests.find(x => String(x.id) === String(reqId));
+  if(!r){ alert(a('الطلب غير موجود','Request not found')); return; }
+  const reasonLabel = LOST_REASONS.find(x=>x.id===reason);
+  addHistory(r, r.status, 'lost');
+  r.status = 'lost';
+  r.lostReason = reason;
+  r.lostReasonLabel = reasonLabel ? (lang==='ar'?reasonLabel.ar:reasonLabel.en) : reason;
+  r.lostNote = note;
+  r.lostAt = new Date().toISOString();
+  r.lostBy = curUser?.user || '';
+  sbSyncReq(reqId);
+  const modal = document.getElementById('mark-lost-modal');
+  if(modal) modal.remove();
+  if(source === 'ops'){ opsMode='list'; opsListTab='archive'; }
+  else { salesMode='list'; }
+  navigate(source === 'ops' ? 'operations' : 'sales');
+}
+
 function opsSaveInvoice(showAlert){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
@@ -5626,6 +5761,16 @@ function opsRemoveInstallment(idx){
   if(!r||!r.installments) return;
   opsSaveInvoice(false);
   r.installments.splice(idx, 1);
+  sbSyncReq(opsCurrentId);
+  opsTab = 'invoice';
+  navigate('operations');
+}
+function opsMarkInstPaid(idx, isPaid){
+  const r = requests.find(x => x.id === opsCurrentId);
+  if(!r||!r.installments?.[idx]) return;
+  r.installments[idx].status = isPaid ? 'paid' : 'pending';
+  if(isPaid) r.installments[idx].paidDate = new Date().toISOString().slice(0,10);
+  else delete r.installments[idx].paidDate;
   sbSyncReq(opsCurrentId);
   opsTab = 'invoice';
   navigate('operations');
@@ -5707,17 +5852,57 @@ function opsSaveExecution(showAlert){
   if(!r) return;
   const g = id => (document.getElementById(id)?.value || '').trim();
   if(!r.execution) r.execution = {};
+  r.execution.insurer       = g('ex-insurer');
   r.execution.policyNumber  = g('ex-polno');
   r.execution.policyStart   = g('ex-start');
   r.execution.policyEnd     = g('ex-end');
   r.execution.finalPremium  = parseFloat(g('ex-premium'))||0;
-  r.execution.commissionPct = parseFloat(g('ex-commpct'))||0;
-  const calcAmt = (r.execution.finalPremium > 0 && r.execution.commissionPct > 0)
-    ? Math.round(r.execution.finalPremium * r.execution.commissionPct / 100 * 100) / 100
-    : (parseFloat(g('ex-commamt'))||0);
-  r.execution.commissionAmt = calcAmt;
+  r.execution.paymentMethod = g('ex-paymethod');
+  if(!isOpsEmp()){
+    r.execution.commissionPct = parseFloat(g('ex-commpct'))||0;
+    const calcAmt = (r.execution.finalPremium > 0 && r.execution.commissionPct > 0)
+      ? Math.round(r.execution.finalPremium * r.execution.commissionPct / 100 * 100) / 100
+      : (parseFloat(g('ex-commamt'))||0);
+    r.execution.commissionAmt = calcAmt;
+  }
   sbSyncReq(opsCurrentId);
   if(showAlert) alert(a('تم حفظ بيانات الوثيقة ✓','Policy data saved ✓'));
+}
+function opsAutoGenInstallments(){
+  const r = requests.find(x => x.id === opsCurrentId);
+  if(!r) return;
+  opsSaveExecution(false);
+  const ex = r.execution || {};
+  const method = ex.paymentMethod;
+  if(!method || method === 'custom'){ alert(a('اختر طريقة دفع (غير مخصصة) لتوليد الجدول تلقائياً','Select a payment method (not custom) to auto-generate')); return; }
+  const premium = parseFloat(ex.finalPremium) || 0;
+  if(!premium){ alert(a('أدخل القسط النهائي أولاً','Enter final premium first')); return; }
+  const startDate = ex.policyStart;
+  if(!startDate){ alert(a('أدخل تاريخ بداية الوثيقة أولاً','Enter policy start date first')); return; }
+  const addMonths = (dateStr, n) => {
+    const d = new Date(dateStr); d.setMonth(d.getMonth() + n);
+    return d.toISOString().slice(0,10);
+  };
+  let installments = [];
+  if(method === 'full'){
+    installments = [{amount: premium, dueDate: startDate, status:'pending'}];
+  } else if(method === 'quarterly'){
+    const amt = Math.round(premium / 4 * 100) / 100;
+    const rem = Math.round((premium - amt*3) * 100) / 100;
+    installments = [0,3,6,9].map((m,i) => ({amount: i===3?rem:amt, dueDate: addMonths(startDate,m), status:'pending'}));
+  } else if(method === 'semi'){
+    const amt = Math.round(premium / 2 * 100) / 100;
+    const rem = Math.round((premium - amt) * 100) / 100;
+    installments = [0,6].map((m,i) => ({amount: i===1?rem:amt, dueDate: addMonths(startDate,m), status:'pending'}));
+  }
+  if(!r.installments) r.installments = [];
+  if(r.installments.length && !confirm(a('سيتم استبدال جدول الدفعات الحالي. هل تريد المتابعة؟','This will replace the current schedule. Continue?'))) return;
+  r.installments = installments;
+  if(!r.invoice) r.invoice = {};
+  r.invoice.total = premium;
+  sbSyncReq(opsCurrentId);
+  opsTab = 'invoice';
+  navigate('operations');
 }
 
 
@@ -6648,6 +6833,8 @@ const FIN_TABS = [
    icon:'<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>'},
   {id:'acstmt', ar:'كشف الحساب', en:'Account Statement',
    icon:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'},
+  {id:'collections', ar:'جدول التحصيل', en:'Collection Schedule',
+   icon:'<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'},
 ];
 function finTopbarActions(){
   const cur=FIN_TABS.find(t=>t.id===finTab)||FIN_TABS[0];
@@ -6682,13 +6869,14 @@ function finNavClose(){
 function finSetTab(id){ finTab=id; coaMode='list'; jnlMode='list'; const tb=document.getElementById('tbActions'); if(tb) tb.innerHTML=finTopbarActions(); const c=document.getElementById('appContent'); if(c) c.innerHTML=pgFin(); setTimeout(initFin,0); }
 function pgFinance(){ return pgFin(); }
 function pgFin(){
-  if(finTab==='coa')     return coaMode==='form'?finCoaFormPage():finCoaPage();
-  if(finTab==='journals') return jnlMode==='form'?finJnlFormPage():finJnlPage();
-  if(finTab==='ledger')    return finLedgerPage();
-  if(finTab==='trial')     return finTrialPage();
-  if(finTab==='statements')return finStatementsPage();
-  if(finTab==='acstmt')    return finAccStmtPage();
-  if(finTab==='findash')   return finDashPage();
+  if(finTab==='coa')         return coaMode==='form'?finCoaFormPage():finCoaPage();
+  if(finTab==='journals')    return jnlMode==='form'?finJnlFormPage():finJnlPage();
+  if(finTab==='ledger')      return finLedgerPage();
+  if(finTab==='trial')       return finTrialPage();
+  if(finTab==='statements')  return finStatementsPage();
+  if(finTab==='acstmt')      return finAccStmtPage();
+  if(finTab==='collections') return finCollectionsPage();
+  if(finTab==='findash')     return finDashPage();
   return '';
 }
 
@@ -7445,6 +7633,111 @@ function coaInitResize(){
   }
 }
 function initFin(){ setTimeout(coaInitResize,30); setTimeout(jnlCalcDepreciation,50); }
+
+/* ════════════════════════════════════════
+   FINANCE — جدول التحصيل (Collections)
+   ════════════════════════════════════════ */
+function finCollectionsPage(){
+  const today = new Date().toISOString().slice(0,10);
+  const soon  = new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+  const rows = [];
+  requests.forEach(r => {
+    if(r.status === 'lost') return;
+    (r.installments||[]).forEach((inst,i) => {
+      const clientName = salesClientName(r) || r.clientName || '—';
+      const salesRep = r.assignedTo || '—';
+      const due = inst.dueDate || '';
+      const isPaid = inst.status === 'paid';
+      const isOverdue = !isPaid && due && due < today;
+      const isSoon    = !isPaid && !isOverdue && due && due <= soon;
+      rows.push({r, inst, i, clientName, salesRep, due, isPaid, isOverdue, isSoon});
+    });
+  });
+  rows.sort((a,b)=>{
+    if(a.isPaid !== b.isPaid) return a.isPaid ? 1 : -1;
+    return (a.due||'').localeCompare(b.due||'');
+  });
+  const totalAll     = rows.reduce((s,x)=>s+(parseFloat(x.inst.amount)||0),0);
+  const totalPaid    = rows.filter(x=>x.isPaid).reduce((s,x)=>s+(parseFloat(x.inst.amount)||0),0);
+  const totalPending = rows.filter(x=>!x.isPaid).reduce((s,x)=>s+(parseFloat(x.inst.amount)||0),0);
+  const totalOver    = rows.filter(x=>x.isOverdue).reduce((s,x)=>s+(parseFloat(x.inst.amount)||0),0);
+  return `
+  ${heading(a('جدول التحصيل','Collection Schedule'), a('متابعة دفعات الوثائق وتأكيد التحصيل','Track policy payments and confirm collection'))}
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+    <div style="flex:1;min-width:140px;padding:16px 18px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac">
+      <div style="font-size:11px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${a('محصَّل','Collected')}</div>
+      <div style="font-size:20px;font-weight:800;color:#15803d" dir="ltr">${fmtMoney(totalPaid)}</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:16px 18px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d">
+      <div style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${a('معلّق','Pending')}</div>
+      <div style="font-size:20px;font-weight:800;color:#b45309" dir="ltr">${fmtMoney(totalPending)}</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:16px 18px;border-radius:var(--r);background:#fee2e2;border:1.5px solid #fca5a5">
+      <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${a('متأخر','Overdue')}</div>
+      <div style="font-size:20px;font-weight:800;color:#dc2626" dir="ltr">${fmtMoney(totalOver)}</div>
+    </div>
+    <div style="flex:1;min-width:140px;padding:16px 18px;border-radius:var(--r);background:var(--bg);border:1.5px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">${a('الإجمالي','Total')}</div>
+      <div style="font-size:20px;font-weight:800;color:var(--text)" dir="ltr">${fmtMoney(totalAll)}</div>
+    </div>
+  </div>
+  ${rows.length === 0 ? `<div style="text-align:center;padding:48px;color:var(--text3);font-size:13px">${a('لا توجد دفعات مسجّلة بعد','No installments recorded yet')}</div>` :
+  `<div style="overflow-x:auto;border-radius:var(--r);border:1.5px solid var(--border)">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <thead>
+      <tr style="background:var(--bg);border-bottom:2px solid var(--border)">
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">#</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('المرجع','Ref')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('العميل','Client')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('المندوب','Sales Rep')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('المبلغ','Amount')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('تاريخ الاستحقاق','Due Date')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('الحالة','Status')}</th>
+        <th style="padding:10px 14px;text-align:start;font-weight:700;color:var(--text2)">${a('تحصيل','Collect')}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map((row,n)=>{
+        const {r,inst,i,clientName,salesRep,due,isPaid,isOverdue,isSoon} = row;
+        const dotColor = isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#d97706':'#94a3b8';
+        const bgRow    = isPaid?'':'isOverdue'&&isOverdue?'#fff5f5':isSoon?'#fffbeb':'';
+        const statusLabel = isPaid?a('محصَّل','Collected'):isOverdue?a('متأخر','Overdue'):isSoon?a('قريباً','Due Soon'):a('قادم','Upcoming');
+        const statusBg    = isPaid?'#dcfce7':isOverdue?'#fee2e2':isSoon?'#fef3c7':'#f1f5f9';
+        const statusColor = isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#b45309':'#64748b';
+        return `<tr style="border-bottom:1px solid var(--border);background:${isOverdue&&!isPaid?'#fff5f5':isSoon&&!isPaid?'#fffbeb':''}">
+          <td style="padding:10px 14px;color:var(--text3)">${n+1}</td>
+          <td style="padding:10px 14px;font-weight:700;color:var(--blue)">${r.ref}</td>
+          <td style="padding:10px 14px;color:var(--text)">${clientName}</td>
+          <td style="padding:10px 14px;color:var(--text2)">${salesRep}</td>
+          <td style="padding:10px 14px;font-weight:700;color:var(--text)" dir="ltr">${fmtMoney(parseFloat(inst.amount)||0)}</td>
+          <td style="padding:10px 14px;color:var(--text)" dir="ltr">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${dotColor};margin-inline-end:5px"></span>
+            ${due || '—'}
+          </td>
+          <td style="padding:10px 14px">
+            <span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${statusBg};color:${statusColor}">${statusLabel}</span>
+          </td>
+          <td style="padding:8px 14px">
+            ${isPaid
+              ? `<button onclick="finMarkInstPaid('${r.id}',${i},false)" style="border:1.5px solid #86efac;background:#dcfce7;color:#15803d;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">✓ ${a('تم','Done')}</button>`
+              : `<button onclick="finMarkInstPaid('${r.id}',${i},true)" style="border:1.5px solid var(--blue);background:var(--blue);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">${a('تأكيد التحصيل','Mark Collected')}</button>`
+            }
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </div>`}`;
+}
+function finMarkInstPaid(reqId, instIdx, isPaid){
+  const r = requests.find(x => String(x.id) === String(reqId));
+  if(!r||!r.installments?.[instIdx]) return;
+  r.installments[instIdx].status = isPaid ? 'paid' : 'pending';
+  if(isPaid) r.installments[instIdx].paidDate = new Date().toISOString().slice(0,10);
+  else delete r.installments[instIdx].paidDate;
+  sbSyncReq(reqId);
+  finSetTab('collections');
+}
 
 /* ══════════════════════════════════════════════════
    JOURNAL ENTRIES — القيود اليومية
