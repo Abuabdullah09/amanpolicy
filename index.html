@@ -4228,12 +4228,11 @@ function salesComparisonSheet(r){
   const clientName = salesClientName(r) || r.clientName || 'Client';
   const _cContact = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
   const clientEmail = r.clientEmail || (_cContact && _cContact.email) || '';
-  if(!r.clientEmail && clientEmail){ r.clientEmail = clientEmail; sbSyncReq(salesCurrentId); }
   const winnerIdx = r.winnerQuoteId ? (r.quotes||[]).findIndex(q => q.id === r.winnerQuoteId) : -1;
 
-  const emailRows = selected.map((q,i)=>`${i+1}. ${q.insurer||'—'} | Quote No: ${q.quoteNo||'—'} | Valid Until: ${q.validUntil||'—'} | Total Premium: ${Number(q.premium||0).toLocaleString()} SAR`).join('%0A');
+  const emailRows = selected.map((q,i)=>`${i+1}. ${q.insurer||'—'} | Quote No: ${q.quoteNo||'—'} | Valid Until: ${q.validUntil||'—'} | Total Premium: ${Number(q.premium||0).toLocaleString()} SAR`).join('\n');
   const emailSubject = encodeURIComponent(`Insurance Quotation Comparison — Ref: ${r.ref}`);
-  const emailBody = encodeURIComponent(`Dear ${clientName},%0A%0APlease find below the quotation comparison for your reference:%0A%0A${decodeURIComponent(emailRows)}%0A%0ABest regards`);
+  const emailBody = encodeURIComponent(`Dear ${clientName},\n\nPlease find below the quotation comparison for your reference:\n\n${emailRows}\n\nBest regards`);
 
   return `
   <div style="margin-bottom:14px;padding:12px 16px;background:linear-gradient(135deg,var(--blue) 0%,#1d4ed8 100%);border-radius:var(--r);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
