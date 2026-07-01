@@ -2252,6 +2252,9 @@ function isOpsEmp(){   return curUser && curUser.role==='employee' && curUser.de
 function isFinUser(){  return curUser && curUser.dept === 'finance'; }
 function isFinMgr(){   return curUser && curUser.role==='manager' && curUser.dept==='finance'; }
 function isOpsUser(){  return curUser && curUser.dept === 'operations'; }
+function isCSUser(){   return curUser && (curUser.dept === 'customers' || curUser.role === 'customer_service'); }
+/* canViewPolicies: Ops, Finance, Admin, CS — read-only central registry */
+function canViewPolicyCentral(){ return curUser && (curUser.role==='superadmin'||isOpsMgr()||isOpsEmp()||isFinUser()||isCSUser()||isMgr()); }
 
 /* هل يقدر المستخدم الحالي يعدّل على طلب مبيعات معيّن؟ */
 function salesUserCanEdit(r){
@@ -4416,8 +4419,16 @@ function salesPoliciesPage(){
   // المندوب يرى بوليصاته فقط، المدير يرى الكل
   const myReqs = requests.filter(r =>
     ['issued','done'].includes(r.opsStatus) &&
+    r.status !== 'lost' &&
     (isMgr() || r.assignedTo === curUser?.user)
-  );
+  ).sort((a,b)=>{
+    const pa = a.execution?.policyNumber||'';
+    const pb = b.execution?.policyNumber||'';
+    if(pa && pb) return pa.localeCompare(pb);
+    const da = a.execution?.policyStart||'';
+    const db = b.execution?.policyStart||'';
+    return db.localeCompare(da);
+  });
 
   // KPIs
   const totalPolicies = myReqs.length;
@@ -4437,7 +4448,7 @@ function salesPoliciesPage(){
     </div>
   </div>
 
-  ${heading(a('بوليصاتي','My Policies'), isMgr() ? a('جميع البوليصات المصدرة','All issued policies') : a('البوليصات المرتبطة بطلباتك','Policies linked to your requests'))}
+  ${heading(a('الوثائق الصادرة','Issued Policies'), isMgr() ? a('جميع وثائق التأمين الصادرة — مرتبة برقم الوثيقة','All issued policies — sorted by policy number') : a('وثائق التأمين المرتبطة بطلباتك','Insurance policies linked to your requests'))}
 
   <!-- KPIs -->
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:22px">
@@ -4483,15 +4494,20 @@ function salesPoliciesPage(){
           <div style="width:5px;background:${isDone?'var(--success)':'var(--blue)'};align-self:stretch;flex-shrink:0;border-radius:var(--r) 0 0 var(--r)"></div>
           <div style="flex:1;padding:16px 18px">
             <!-- الرأس -->
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                <span style="font-size:14px;font-weight:800;color:var(--text)" dir="ltr">${r.ref}</span>
-                ${ex.policyNumber ? `<span style="font-size:12px;font-weight:600;color:var(--text2)" dir="ltr">· ${ex.policyNumber}</span>` : ''}
-                <span style="font-size:11.5px;padding:2px 10px;border-radius:99px;font-weight:600;background:${isDone?'#dcfce7':'#dbeafe'};color:${isDone?'#16a34a':'#1d4ed8'}">
-                  ${isDone?a('مكتمل','Done'):a('مُصدر','Issued')}
-                </span>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+              <div>
+                <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">${a('وثيقة تأمين','Insurance Policy')}</div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  ${ex.policyNumber
+                    ? `<span style="font-family:'Inter',sans-serif;font-size:16px;font-weight:900;color:var(--blue);letter-spacing:.01em">${ex.policyNumber}</span>`
+                    : `<span style="font-size:13px;font-weight:700;color:var(--text3);font-style:italic">${a('بانتظار رقم الوثيقة','Awaiting policy number')}</span>`}
+                  <span style="font-size:11.5px;padding:2px 10px;border-radius:99px;font-weight:600;background:${isDone?'#dcfce7':'#dbeafe'};color:${isDone?'#16a34a':'#1d4ed8'}">
+                    ${isDone?a('مكتمل','Done'):a('مُصدر','Issued')}
+                  </span>
+                </div>
+                <div style="font-size:11.5px;color:var(--text3);margin-top:4px">${salesClientName(r)||'—'} · ${a('مرجع:','Ref:')} <span dir="ltr" style="font-family:'Inter',sans-serif">${r.ref}</span></div>
               </div>
-              <div style="font-size:12px;color:var(--text2)">${salesClientName(r)||'—'}</div>
+              <div style="font-size:11px;color:var(--text3);text-align:end">${r.assignedTo||''}</div>
             </div>
             <!-- البيانات الأساسية -->
             <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:${inst.length?'14px':'0'}">
@@ -4549,12 +4565,26 @@ function slsMarkInstPaid(reqId, instIdx){
 let opsMode = 'list', opsCurrentId = null, opsTab = 'info', opsFilter = 'all', opsView = 'cards';
 let opsShowUnassigned = false;
 let opsListTab = 'active';
+let opsPolMode = 'list';
+let opsPolCurrentId = null;
+let opsPolQ = '';
+let opsPolSortKey = 'policyStart';
+let opsPolSortDir = 'desc';
+const POLICY_STATUSES = [
+  {id:'active',     ar:'نشطة',          en:'Active',          color:'#16a34a', bg:'#dcfce7'},
+  {id:'pending',    ar:'قيد الإصدار',   en:'Pending Issuance',color:'#2563eb', bg:'#dbeafe'},
+  {id:'endorsed',   ar:'تحت التعديل',   en:'Endorsed',        color:'#b45309', bg:'#fef3c7'},
+  {id:'cancelled',  ar:'ملغاة',         en:'Cancelled',       color:'#dc2626', bg:'#fee2e2'},
+  {id:'expired',    ar:'منتهية',        en:'Expired',         color:'#64748b', bg:'#f1f5f9'},
+];
+function polStatusDef(id){ return POLICY_STATUSES.find(s=>s.id===id)||POLICY_STATUSES[0]; }
 function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
 let opsCols = {client:true,salesRep:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
 let opsSortDir = 'desc';
 
 function pgOps(){
   if(opsMode === 'view') return opsViewSheet();
+  if(opsListTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
   return opsListPage();
 }
 function initOps(){ if(opsMode === 'list') renderOpsList(); }
@@ -4572,29 +4602,32 @@ function opsRequests(){
   if(opsListTab === 'issuance') return all.filter(r => r.status === 'sent' && ['executing','issued'].includes(r.opsStatus));
   return all.filter(r => r.status === 'sent' && !['done'].includes(r.opsStatus));
 }
-function opsSetListTab(t){ opsListTab=t; opsFilter='all'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsSetListTab(t){ opsListTab=t; opsFilter='all'; opsPolMode='list'; opsPolCurrentId=null; opsPolQ=''; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+
+function opsNavTabBar(){
+  const allR = opsRequestsAll();
+  const cntActive   = allR.filter(r => r.status==='sent' && !['done'].includes(r.opsStatus)).length;
+  const cntIssuance = allR.filter(r => r.status==='sent' && ['executing','issued'].includes(r.opsStatus)).length;
+  const cntArchive  = allR.filter(r => r.status==='lost' || r.opsStatus==='done').length;
+  const cntPolicies = requests.filter(r => r.execution?.policyNumber && r.status!=='lost').length;
+  const tabBtn = (id, label, count) => `<button onclick="opsSetListTab('${id}')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab===id?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab===id?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
+    ${label} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab===id?'var(--blue)':'var(--bg)'};color:${opsListTab===id?'#fff':'var(--text3)'};">${count}</span>
+  </button>`;
+  return `<div style="display:flex;gap:2px;margin-bottom:12px;border-bottom:2px solid var(--border);overflow-x:auto">
+    ${tabBtn('active',   a('الطلبات النشطة','Active Requests'), cntActive)}
+    ${tabBtn('issuance', a('تحت الإصدار','Under Issuance'),     cntIssuance)}
+    ${tabBtn('archive',  a('الأرشيف','Archive'),                cntArchive)}
+    ${tabBtn('policies', a('سجل الوثائق','Policy Registry'),    cntPolicies)}
+  </div>`;
+}
 
 /* ════════════════════════════════════════
    1) قائمة الطلبات الواردة
    ════════════════════════════════════════ */
 function opsListPage(){
-  const allR = opsRequestsAll();
-  const cntActive   = allR.filter(r => r.status==='sent' && !['done'].includes(r.opsStatus)).length;
-  const cntIssuance = allR.filter(r => r.status==='sent' && ['executing','issued'].includes(r.opsStatus)).length;
-  const cntArchive  = allR.filter(r => r.status==='lost' || r.opsStatus==='done').length;
   return `
   ${heading(a('الأوبريشن','Operations'), a('معالجة الطلبات الواردة وعروض الأسعار','Process incoming requests & quotes'))}
-  <div style="display:flex;gap:2px;padding:0 0 0 0;margin-bottom:12px;border-bottom:2px solid var(--border);overflow-x:auto">
-    <button onclick="opsSetListTab('active')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='active'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='active'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
-      ${a('الطلبات النشطة','Active Requests')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='active'?'var(--blue)':'var(--bg)'};color:${opsListTab==='active'?'#fff':'var(--text3)'};">${cntActive}</span>
-    </button>
-    <button onclick="opsSetListTab('issuance')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='issuance'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='issuance'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
-      ${a('تحت الإصدار','Under Issuance')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='issuance'?'var(--blue)':'var(--bg)'};color:${opsListTab==='issuance'?'#fff':'var(--text3)'};">${cntIssuance}</span>
-    </button>
-    <button onclick="opsSetListTab('archive')" style="padding:9px 18px;border:none;background:transparent;font-family:var(--font);font-size:13px;font-weight:600;color:${opsListTab==='archive'?'var(--blue)':'var(--text2)'};border-bottom:2px solid ${opsListTab==='archive'?'var(--blue)':'transparent'};margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:color .13s">
-      ${a('الأرشيف','Archive')} <span style="font-size:11px;padding:1px 7px;border-radius:99px;background:${opsListTab==='archive'?'var(--blue)':'var(--bg)'};color:${opsListTab==='archive'?'#fff':'var(--text3)'};">${cntArchive}</span>
-    </button>
-  </div>
+  ${opsNavTabBar()}
   <div class="cc-toolbar">
     <div class="srch-wr cc-search">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -4926,6 +4959,257 @@ function opsInitResize(){
 /* ════════════════ التنقل ════════════════ */
 function opsOpen(id){ opsCurrentId = id; opsMode = 'view'; opsTab = 'info'; navigate('operations'); }
 function opsBackList(){ opsMode = 'list'; opsCurrentId = null; navigate('operations'); }
+
+/* ════════════════ سجل الوثائق — Policy Registry (Ops) ════════════════ */
+function opsPolOpen(reqId){ opsPolCurrentId=reqId; opsPolMode='view'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsPolBack(){ opsPolCurrentId=null; opsPolMode='list'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsPolDoSort(key){ if(opsPolSortKey===key){opsPolSortDir=opsPolSortDir==='desc'?'asc':'desc';}else{opsPolSortKey=key;opsPolSortDir='asc';} const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+
+function opsPoliciesRegistryPage(){
+  const today = new Date().toISOString().slice(0,10);
+  const q = opsPolQ.toLowerCase().trim();
+  let list = requests.filter(r => r.execution?.policyNumber && r.status!=='lost');
+  if(q) list = list.filter(r => {
+    const ex = r.execution||{};
+    return [ex.policyNumber, salesClientName(r), r.ref, ex.insurer, r.assignedTo].join(' ').toLowerCase().includes(q);
+  });
+  list.sort((a,b)=>{
+    const ea=a.execution||{}, eb=b.execution||{};
+    const key = opsPolSortKey;
+    let va='', vb='';
+    if(key==='policyNumber'){ va=ea.policyNumber||''; vb=eb.policyNumber||''; }
+    else if(key==='client'){ va=salesClientName(a)||''; vb=salesClientName(b)||''; }
+    else if(key==='insurer'){ va=ea.insurer||''; vb=eb.insurer||''; }
+    else if(key==='policyStart'){ va=ea.policyStart||''; vb=eb.policyStart||''; }
+    else if(key==='policyEnd'){ va=ea.policyEnd||''; vb=eb.policyEnd||''; }
+    else if(key==='premium'){ return opsPolSortDir==='desc'?(parseFloat(eb.finalPremium)||0)-(parseFloat(ea.finalPremium)||0):(parseFloat(ea.finalPremium)||0)-(parseFloat(eb.finalPremium)||0); }
+    return opsPolSortDir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
+  const sortIcon = d => d==='desc'
+    ? `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
+    : `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+  const th = (key, label) => {
+    const active = opsPolSortKey===key;
+    return `<th onclick="opsPolDoSort('${key}')" style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:${active?'var(--blue)':'var(--text2)'};cursor:pointer;user-select:none;white-space:nowrap;border-bottom:2px solid var(--border)">
+      ${label} ${active?sortIcon(opsPolSortDir):'<span style="opacity:.2">↕</span>'}
+    </th>`;
+  };
+  const totalPolicies = list.length;
+  const activeCnt   = list.filter(r=>{const e=r.execution||{};return e.policyEnd>=today&&!['cancelled','expired'].includes(e.policyStatus);}).length;
+  const expiringCnt = list.filter(r=>{const e=r.execution||{};const d=e.policyEnd||'';return d && d>=today && d<=new Date(Date.now()+30*864e5).toISOString().slice(0,10);}).length;
+  return `
+  ${opsNavTabBar()}
+  ${heading(a('سجل الوثائق','Policy Registry'), a('جميع وثائق التأمين الصادرة — للقراءة والاطلاع','All issued insurance policies — read-only central registry'))}
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px">
+    <div style="flex:1;min-width:120px;padding:12px 16px;border-radius:var(--r);background:var(--bg);border:1.5px solid var(--border)">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:4px">${a('إجمالي','Total')}</div>
+      <div style="font-size:22px;font-weight:800;color:var(--text)">${totalPolicies}</div>
+    </div>
+    <div style="flex:1;min-width:120px;padding:12px 16px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac">
+      <div style="font-size:10.5px;font-weight:700;color:#15803d;text-transform:uppercase;margin-bottom:4px">${a('سارية','Active')}</div>
+      <div style="font-size:22px;font-weight:800;color:#15803d">${activeCnt}</div>
+    </div>
+    <div style="flex:1;min-width:120px;padding:12px 16px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d">
+      <div style="font-size:10.5px;font-weight:700;color:#b45309;text-transform:uppercase;margin-bottom:4px">${a('تنتهي قريباً','Expiring')}</div>
+      <div style="font-size:22px;font-weight:800;color:#b45309">${expiringCnt}</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+    <div class="srch-wr" style="flex:1;max-width:380px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" value="${opsPolQ}" placeholder="${a('بحث برقم الوثيقة أو العميل أو الشركة...','Search by policy no., client or insurer...')}"
+        oninput="opsPolQ=this.value;const c=document.getElementById('appContent');if(c){c.innerHTML=pgOps();setTimeout(initOps,0);}"
+        style="border:none;background:transparent;outline:none;font-family:var(--font);font-size:13px;color:var(--text);flex:1"/>
+    </div>
+    <span style="font-size:12px;color:var(--text3)">${list.length} ${a('وثيقة','policies')}</span>
+  </div>
+  ${list.length===0
+    ? `<div style="text-align:center;padding:60px;color:var(--text3);font-size:13px">${opsPolQ?a('لا توجد نتائج','No results'):a('لا توجد وثائق صادرة بعد','No issued policies yet')}</div>`
+    : `<div style="overflow-x:auto;border:1.5px solid var(--border);border-radius:var(--r)">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <thead><tr style="background:var(--bg)">
+      ${th('policyNumber', a('رقم الوثيقة','Policy No.'))}
+      ${th('client',       a('العميل','Client'))}
+      ${th('insurer',      a('شركة التأمين','Insurer'))}
+      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('النوع','Type')}</th>
+      ${th('premium',     a('القسط','Premium'))}
+      ${th('policyStart', a('البداية','Start'))}
+      ${th('policyEnd',   a('النهاية','End'))}
+      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('حالة الوثيقة','Status')}</th>
+    </tr></thead>
+    <tbody>
+      ${list.map(r=>{
+        const ex=r.execution||{};
+        const clientName=salesClientName(r)||'—';
+        const polEnd=ex.policyEnd||'';
+        const psDef=polStatusDef(ex.policyStatus||'active');
+        const isExpiredDate=polEnd&&polEnd<today;
+        const isSoon=!isExpiredDate&&polEnd&&polEnd<=new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+        const effStatus = ex.policyStatus==='cancelled'?'cancelled': isExpiredDate&&ex.policyStatus==='active'?'expired':ex.policyStatus||'active';
+        const ps=polStatusDef(effStatus);
+        return `<tr onclick="opsPolOpen('${r.id}')" style="border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <td style="padding:12px 14px">
+            <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:900;color:var(--blue)">${ex.policyNumber}</div>
+            <div style="font-size:10.5px;color:var(--text3);margin-top:2px">${a('مرجع:','Ref:')} ${r.ref}</div>
+          </td>
+          <td style="padding:12px 14px">
+            <div style="font-weight:600;color:var(--text)">${clientName}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:1px">${r.assignedTo||'—'}</div>
+          </td>
+          <td style="padding:12px 14px;color:var(--text2)">${ex.insurer||'—'}</td>
+          <td style="padding:12px 14px">${badge('bg-gray',insTypeLabel(r.insType)||'—')}</td>
+          <td style="padding:12px 14px;font-weight:700;color:var(--text)" dir="ltr">${ex.finalPremium?fmtMoney(parseFloat(ex.finalPremium)):'—'}</td>
+          <td style="padding:12px 14px;font-family:'Inter',sans-serif;color:var(--text)" dir="ltr">${ex.policyStart||'—'}</td>
+          <td style="padding:12px 14px;font-family:'Inter',sans-serif;color:${isSoon?'#b45309':isExpiredDate?'#dc2626':'var(--text)'};font-weight:${isSoon||isExpiredDate?'700':'400'}" dir="ltr">${polEnd||'—'}</td>
+          <td style="padding:12px 14px"><span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span></td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table></div>`}`;
+}
+
+function opsPolicyDetailPage(){
+  const r = requests.find(x=>String(x.id)===String(opsPolCurrentId));
+  if(!r){ opsPolMode='list'; return opsPoliciesRegistryPage(); }
+  const ex=r.execution||{};
+  const clientName=salesClientName(r)||r.clientName||'—';
+  const c=r.contactId?contacts.find(x=>String(x.id)===String(r.contactId)):null;
+  const today=new Date().toISOString().slice(0,10);
+  const polEnd=ex.policyEnd||'';
+  const isExpiredDate=polEnd&&polEnd<today;
+  const effStatus=ex.policyStatus==='cancelled'?'cancelled':isExpiredDate&&ex.policyStatus==='active'?'expired':ex.policyStatus||'active';
+  const ps=polStatusDef(effStatus);
+  const inst=r.installments||[];
+  const paidAmt=inst.filter(x=>x.status==='paid').reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const totalAmt=inst.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const showComm=!isOpsEmp();
+  const isReadOnly=true;
+  const payMethodLabel={full:a('دفعة كاملة','Full Payment'),quarterly:a('ربع سنوية','Quarterly'),semi:a('نصف سنوية','Semi-Annual'),custom:a('مخصصة','Custom')}[ex.paymentMethod]||'—';
+  return `
+  ${opsNavTabBar()}
+  <div class="sheet-bar">
+    <div class="sheet-bar-l">
+      <button class="btn btn-o btn-sm" onclick="opsPolBack()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:${lang==='ar'?'scaleX(-1)':'none'}"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        ${a('رجوع للسجل','Back to Registry')}
+      </button>
+    </div>
+    <div class="sheet-bar-r" style="gap:8px">
+      <span style="font-size:11.5px;padding:4px 12px;border-radius:99px;font-weight:700;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span>
+      <!-- إجراءات مستقبلية — مخصصة لخدمة العملاء CS (معطّلة حالياً) -->
+      <button disabled title="${a('متاح قريباً لخدمة العملاء','Coming soon — CS role')}" style="padding:5px 12px;border:1.5px dashed var(--border);background:var(--bg);color:var(--text3);border-radius:8px;font-size:12px;font-weight:600;cursor:not-allowed;opacity:.6">
+        + ${a('ملحق تعديل','Endorsement')}
+      </button>
+      <button disabled title="${a('متاح قريباً','Coming soon')}" style="padding:5px 12px;border:1.5px dashed #fca5a5;background:#fff5f5;color:#fca5a5;border-radius:8px;font-size:12px;font-weight:600;cursor:not-allowed;opacity:.6">
+        ✕ ${a('إلغاء الوثيقة','Cancel Policy')}
+      </button>
+    </div>
+  </div>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="sheet-photo" style="background:var(--blue)">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="sheet-head-main">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">${a('وثيقة تأمين','Insurance Policy')}</div>
+        <div style="font-size:28px;font-weight:900;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:.01em">${ex.policyNumber||a('بدون رقم','No Number')}</div>
+        <div style="font-size:13.5px;color:var(--text2);margin-top:6px;font-weight:500">${clientName}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">${ex.insurer||''} · ${insTypeLabel(r.insType)||''}</div>
+      </div>
+    </div>
+
+    <!-- بيانات الوثيقة الأساسية -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px">
+      ${[
+        [a('شركة التأمين','Insurer'), ex.insurer||'—'],
+        [a('نوع التأمين','Type'), insTypeLabel(r.insType)||'—'],
+        [a('القسط الإجمالي','Total Premium'), ex.finalPremium?fmtMoney(parseFloat(ex.finalPremium)):'—'],
+        [a('طريقة الدفع','Payment Method'), payMethodLabel],
+        [a('بداية التغطية','Coverage Start'), ex.policyStart||'—'],
+        [a('نهاية التغطية','Coverage End'), ex.policyEnd||'—'],
+        [a('تاريخ الإصدار','Issued On'), ex.issuedAt||'—'],
+        [a('حالة الوثيقة','Policy Status'), `<span style="font-size:11.5px;padding:2px 9px;border-radius:99px;font-weight:700;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span>`],
+      ].map(([lbl,val])=>`
+      <div style="padding:12px 14px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r)">
+        <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${lbl}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)" dir="ltr">${val}</div>
+      </div>`).join('')}
+    </div>
+
+    ${showComm && (ex.commissionAmt||ex.commissionPct) ? (()=>{
+      const commAmt=parseFloat(ex.commissionAmt)||0;
+      const vatAmt=Math.round(commAmt*0.15*100)/100;
+      const iaFee=Math.round(commAmt*0.01*100)/100;
+      const netComm=Math.round((commAmt-iaFee)*100)/100;
+      return `<div style="padding:14px 18px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:var(--r);margin-bottom:18px">
+        <div style="font-size:10.5px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">💰 ${a('تفاصيل العمولة','Commission Breakdown')}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;font-size:12.5px;color:var(--text2)">
+          <div>${a('نسبة العمولة:','Commission %:')} <b style="color:var(--text)">${ex.commissionPct||0}%</b></div>
+          <div>${a('عمولة الوسيط:','Broker comm.:')} <b dir="ltr">${fmtMoney(commAmt)}</b></div>
+          <div>${a('رسوم الهيئة (1%):','IA Fee (1%):')} <b style="color:#b8740f" dir="ltr">- ${fmtMoney(iaFee)}</b></div>
+          <div>${a('ضريبة القيمة المضافة (15%):','VAT (15%):')} <b dir="ltr">+ ${fmtMoney(vatAmt)}</b></div>
+          <div style="grid-column:1/-1;border-top:1px solid #86efac;padding-top:8px">${a('صافي العمولة:','Net Commission:')} <b style="color:#059669;font-size:14px" dir="ltr">${fmtMoney(netComm)}</b></div>
+        </div>
+      </div>`;
+    })() : ''}
+
+    <!-- جدول الدفعات -->
+    <div style="margin-bottom:18px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">${a('جدول الدفعات','Payment Schedule')}</div>
+      ${inst.length===0
+        ? `<div style="padding:18px;text-align:center;color:var(--text3);font-size:12.5px;border:1.5px dashed var(--border);border-radius:var(--r)">${a('لا توجد دفعات','No installments')}</div>`
+        : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="padding:8px 14px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac;font-size:12px;color:#15803d;font-weight:700">${a('محصَّل','Collected')} <span dir="ltr">${fmtMoney(paidAmt)}</span></div>
+          <div style="padding:8px 14px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d;font-size:12px;color:#b45309;font-weight:700">${a('معلّق','Pending')} <span dir="ltr">${fmtMoney(totalAmt-paidAmt)}</span></div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden">
+          <thead><tr style="background:var(--bg);border-bottom:1.5px solid var(--border)">
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">#</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('المبلغ','Amount')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('الاستحقاق','Due Date')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('الحالة','Status')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('تاريخ التحصيل','Collected On')}</th>
+          </tr></thead>
+          <tbody>
+            ${inst.map((x,i)=>{
+              const due=x.dueDate||''; const isPaid=x.status==='paid';
+              const isOvd=!isPaid&&due&&due<today; const isSn=!isPaid&&!isOvd&&due&&due<=new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+              const dot=isPaid?'#16a34a':isOvd?'#dc2626':isSn?'#d97706':'#94a3b8';
+              const sBg=isPaid?'#dcfce7':isOvd?'#fee2e2':isSn?'#fef3c7':'#f1f5f9';
+              const sClr=isPaid?'#16a34a':isOvd?'#dc2626':isSn?'#b45309':'#64748b';
+              const sLbl=isPaid?a('محصَّل','Collected'):isOvd?a('متأخر','Overdue'):isSn?a('قريباً','Due Soon'):a('قادم','Upcoming');
+              return `<tr style="border-bottom:1px solid var(--border);background:${isOvd&&!isPaid?'#fff5f5':isSn&&!isPaid?'#fffbeb':''}">
+                <td style="padding:9px 12px;color:var(--text3)"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${dot};margin-inline-end:5px"></span>${i+1}</td>
+                <td style="padding:9px 12px;font-weight:700;color:var(--text)" dir="ltr">${fmtMoney(parseFloat(x.amount)||0)}</td>
+                <td style="padding:9px 12px;color:var(--text)" dir="ltr">${due||'—'}</td>
+                <td style="padding:9px 12px"><span style="font-size:11px;padding:2px 8px;border-radius:99px;font-weight:600;background:${sBg};color:${sClr}">${sLbl}</span></td>
+                <td style="padding:9px 12px;color:var(--text3)" dir="ltr">${x.paidDate||'—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`}
+    </div>
+
+    <!-- بيانات العميل -->
+    ${c ? `<div style="padding:12px 16px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r);margin-bottom:16px">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('بيانات العميل','Client Details')}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;font-size:12.5px;color:var(--text2)">
+        <div>${a('الاسم:','Name:')} <b style="color:var(--text)">${c.name||'—'}</b></div>
+        <div>${a('المسؤول:','Contact:')} <b style="color:var(--text)">${c.person||'—'}</b></div>
+        <div dir="ltr">${a('الجوال:','Phone:')} <b style="color:var(--text)">${c.phone||'—'}</b></div>
+        <div dir="ltr">${a('البريد:','Email:')} <b style="color:var(--text)">${c.email||'—'}</b></div>
+      </div>
+    </div>` : ''}
+
+    <!-- الطلب الأصلي — مرجع فرعي فقط -->
+    <div style="padding:10px 14px;background:var(--bg);border:1.5px dashed var(--border);border-radius:var(--r);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span style="font-size:11px;color:var(--text3)">${a('الطلب المرتبط / Linked Request Ref:','Linked Request Ref:')}</span>
+      <span style="font-family:'Inter',sans-serif;font-size:12px;font-weight:700;color:var(--text2)">${r.ref}</span>
+      <span style="font-size:11px;color:var(--text3);margin-inline-start:auto">${a('المندوب:','Sales Rep:')} ${r.assignedTo||'—'}</span>
+    </div>
+  </div>`;
+}
 
 /* تكليف موظف عمليات — يظهر فقط للمدير في مرحلة inbox */
 function opsAssignHandler(userVal){
@@ -5632,6 +5916,8 @@ function opsIssuePolicy(){
   if(!ex.policyNumber){ alert(a('أدخل رقم الوثيقة أولاً (تبويب بيانات الوثيقة)','Enter policy number first (Policy tab)')); return; }
   addHistory(r, a('قيد التنفيذ','Executing'), a('صدرت الوثيقة','Policy Issued'));
   r.opsStatus = 'issued';
+  if(!r.execution.policyStatus) r.execution.policyStatus = 'active';
+  r.execution.issuedAt = r.execution.issuedAt || new Date().toISOString().slice(0,10);
   sbSyncReq(opsCurrentId);
   sendSystemNotification(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success');
   navigate('operations');
@@ -6816,6 +7102,11 @@ function delCC(id){ ccCurrentId=id; ccDelete(); }
 /* ── State ── */
 let finTab  = 'findash';
 let coaMode = 'list';
+let finPolMode = 'list';
+let finPolCurrentId = null;
+let finPolSortKey = 'policyStart';
+let finPolSortDir = 'desc';
+let finPolQ = '';
 
 /* ── Tabs ── */
 const FIN_TABS = [
@@ -6835,6 +7126,8 @@ const FIN_TABS = [
    icon:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>'},
   {id:'collections', ar:'جدول التحصيل', en:'Collection Schedule',
    icon:'<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>'},
+  {id:'policies', ar:'الوثائق', en:'Policies',
+   icon:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'},
 ];
 function finTopbarActions(){
   const cur=FIN_TABS.find(t=>t.id===finTab)||FIN_TABS[0];
@@ -6866,7 +7159,7 @@ function finNavToggle(e){
 function finNavClose(){
   const dd=document.getElementById('fin-nav-dd');if(dd)dd.style.display='none';
 }
-function finSetTab(id){ finTab=id; coaMode='list'; jnlMode='list'; const tb=document.getElementById('tbActions'); if(tb) tb.innerHTML=finTopbarActions(); const c=document.getElementById('appContent'); if(c) c.innerHTML=pgFin(); setTimeout(initFin,0); }
+function finSetTab(id){ finTab=id; coaMode='list'; jnlMode='list'; finPolMode='list'; finPolCurrentId=null; const tb=document.getElementById('tbActions'); if(tb) tb.innerHTML=finTopbarActions(); const c=document.getElementById('appContent'); if(c) c.innerHTML=pgFin(); setTimeout(initFin,0); }
 function pgFinance(){ return pgFin(); }
 function pgFin(){
   if(finTab==='coa')         return coaMode==='form'?finCoaFormPage():finCoaPage();
@@ -6876,6 +7169,7 @@ function pgFin(){
   if(finTab==='statements')  return finStatementsPage();
   if(finTab==='acstmt')      return finAccStmtPage();
   if(finTab==='collections') return finCollectionsPage();
+  if(finTab==='policies')    return finPolMode==='view' ? finPolicyDetailPage() : finPoliciesPage();
   if(finTab==='findash')     return finDashPage();
   return '';
 }
@@ -7737,6 +8031,292 @@ function finMarkInstPaid(reqId, instIdx, isPaid){
   else delete r.installments[instIdx].paidDate;
   sbSyncReq(reqId);
   finSetTab('collections');
+}
+
+/* ════════════════════════════════════════
+   FINANCE — الوثائق (Policies)
+   ════════════════════════════════════════ */
+function finPoliciesFiltered(){
+  const q = finPolQ.toLowerCase().trim();
+  const list = requests.filter(r => r.execution?.policyNumber && r.status !== 'lost');
+  return list.filter(r => {
+    if(!q) return true;
+    const ex = r.execution || {};
+    const hay = [ex.policyNumber, salesClientName(r), r.ref, ex.insurer, r.assignedTo].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+function finPolSort(key){
+  if(finPolSortKey === key){ finPolSortDir = finPolSortDir==='desc'?'asc':'desc'; }
+  else { finPolSortKey = key; finPolSortDir = 'asc'; }
+  const c = document.getElementById('appContent'); if(c){ c.innerHTML=pgFin(); setTimeout(initFin,0); }
+}
+function finPolOpen(reqId){ finPolCurrentId = reqId; finPolMode = 'view'; const c = document.getElementById('appContent'); if(c){ c.innerHTML=pgFin(); setTimeout(initFin,0); } }
+function finPolBack(){ finPolCurrentId = null; finPolMode = 'list'; const c = document.getElementById('appContent'); if(c){ c.innerHTML=pgFin(); setTimeout(initFin,0); } }
+function finPoliciesPage(){
+  const allPolicies = finPoliciesFiltered();
+  allPolicies.sort((a,b)=>{
+    const ea = a.execution||{}, eb = b.execution||{};
+    let va='', vb='';
+    if(finPolSortKey==='policyNumber'){ va=ea.policyNumber||''; vb=eb.policyNumber||''; }
+    else if(finPolSortKey==='policyStart'){ va=ea.policyStart||''; vb=eb.policyStart||''; }
+    else if(finPolSortKey==='client'){ va=salesClientName(a)||''; vb=salesClientName(b)||''; }
+    else if(finPolSortKey==='insurer'){ va=ea.insurer||''; vb=eb.insurer||''; }
+    else if(finPolSortKey==='premium'){ va=parseFloat(ea.finalPremium)||0; vb=parseFloat(eb.finalPremium)||0; }
+    if(typeof va==='number') return finPolSortDir==='desc' ? vb-va : va-vb;
+    return finPolSortDir==='desc' ? vb.localeCompare(va) : va.localeCompare(vb);
+  });
+  const today = new Date().toISOString().slice(0,10);
+  const totalPolicies   = allPolicies.length;
+  const totalPremium    = allPolicies.reduce((s,r)=>s+(parseFloat(r.execution?.finalPremium)||0),0);
+  const activePolicies  = allPolicies.filter(r=>(r.execution?.policyEnd||''  )>=today).length;
+  const expiredPolicies = allPolicies.filter(r=>(r.execution?.policyEnd||'')<today && r.execution?.policyEnd).length;
+  const sortIcon = dir => dir==='desc'
+    ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
+    : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+  const thBtn = (key, label) => {
+    const isActive = finPolSortKey === key;
+    return `<th onclick="finPolSort('${key}')" style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:${isActive?'var(--blue)':'var(--text2)'};cursor:pointer;user-select:none;white-space:nowrap">
+      ${label} ${isActive ? sortIcon(finPolSortDir) : '<span style="opacity:.25">↕</span>'}
+    </th>`;
+  };
+  return `
+  ${heading(a('الوثائق','Policies'), a('سجل وثائق التأمين الصادرة','Issued insurance policy registry'))}
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+    <div style="flex:1;min-width:130px;padding:14px 18px;border-radius:var(--r);background:var(--bg);border:1.5px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${a('إجمالي الوثائق','Total Policies')}</div>
+      <div style="font-size:22px;font-weight:800;color:var(--text)">${totalPolicies}</div>
+    </div>
+    <div style="flex:1;min-width:130px;padding:14px 18px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac">
+      <div style="font-size:11px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${a('وثائق سارية','Active')}</div>
+      <div style="font-size:22px;font-weight:800;color:#15803d">${activePolicies}</div>
+    </div>
+    <div style="flex:1;min-width:130px;padding:14px 18px;border-radius:var(--r);background:#fff7ed;border:1.5px solid #fed7aa">
+      <div style="font-size:11px;font-weight:700;color:#c2410c;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${a('منتهية','Expired')}</div>
+      <div style="font-size:22px;font-weight:800;color:#c2410c">${expiredPolicies}</div>
+    </div>
+    <div style="flex:2;min-width:180px;padding:14px 18px;border-radius:var(--r);background:#eff6ff;border:1.5px solid #bfdbfe">
+      <div style="font-size:11px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${a('إجمالي الأقساط','Total Premiums')}</div>
+      <div style="font-size:22px;font-weight:800;color:#1d4ed8" dir="ltr">${fmtMoney(totalPremium)}</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+    <div class="srch-wr" style="flex:1;max-width:380px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" value="${finPolQ}" placeholder="${a('بحث برقم الوثيقة أو العميل أو الشركة...','Search by policy no., client, or insurer...')}" oninput="finPolQ=this.value;const c=document.getElementById('appContent');if(c){c.innerHTML=pgFin();setTimeout(initFin,0);}" style="border:none;background:transparent;outline:none;font-family:var(--font);font-size:13px;color:var(--text);flex:1"/>
+    </div>
+    <span style="font-size:12px;color:var(--text3)">${allPolicies.length} ${a('وثيقة','policies')}</span>
+  </div>
+  ${allPolicies.length === 0
+    ? `<div style="text-align:center;padding:60px;color:var(--text3);font-size:13px">${finPolQ ? a('لا توجد نتائج','No results') : a('لا توجد وثائق صادرة بعد','No issued policies yet')}</div>`
+    : `<div style="overflow-x:auto;border-radius:var(--r);border:1.5px solid var(--border)">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <thead>
+      <tr style="background:var(--bg);border-bottom:2px solid var(--border)">
+        ${thBtn('policyNumber', a('رقم الوثيقة','Policy Number'))}
+        ${thBtn('client',       a('العميل','Client'))}
+        ${thBtn('insurer',      a('شركة التأمين','Insurer'))}
+        <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('نوع التأمين','Type')}</th>
+        ${thBtn('premium',     a('القسط','Premium'))}
+        ${thBtn('policyStart', a('بداية التغطية','Start Date'))}
+        <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('نهاية التغطية','End Date')}</th>
+        <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('الحالة','Status')}</th>
+        <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('الدفعات','Payments')}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${allPolicies.map(r => {
+        const ex = r.execution || {};
+        const clientName = salesClientName(r) || '—';
+        const policyEnd = ex.policyEnd || '';
+        const isExpired = policyEnd && policyEnd < today;
+        const isExpiringSoon = !isExpired && policyEnd && policyEnd <= new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+        const statusLabel = isExpired ? a('منتهية','Expired') : isExpiringSoon ? a('تنتهي قريباً','Expiring Soon') : ex.policyEnd ? a('سارية','Active') : a('غير محدد','—');
+        const statusBg    = isExpired ? '#fee2e2' : isExpiringSoon ? '#fef3c7' : ex.policyEnd ? '#dcfce7' : '#f1f5f9';
+        const statusColor = isExpired ? '#dc2626' : isExpiringSoon ? '#b45309' : ex.policyEnd ? '#16a34a' : '#64748b';
+        const inst = r.installments || [];
+        const paidCount = inst.filter(x=>x.status==='paid').length;
+        const payMethod = {full:a('كاملة','Full'),quarterly:a('ربع سنوي','Quarterly'),semi:a('نصف سنوي','Semi'),custom:a('مخصص','Custom')}[ex.paymentMethod] || '—';
+        return `<tr onclick="finPolOpen('${r.id}')" style="border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+          <td style="padding:12px 14px">
+            <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:800;color:var(--blue);letter-spacing:.01em">${ex.policyNumber}</div>
+            <div style="font-size:10.5px;color:var(--text3);margin-top:2px;font-family:'Inter',sans-serif">${payMethod}</div>
+          </td>
+          <td style="padding:12px 14px">
+            <div style="font-weight:600;color:var(--text)">${clientName}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:1px">${r.assignedTo||'—'}</div>
+          </td>
+          <td style="padding:12px 14px;color:var(--text2)">${ex.insurer||'—'}</td>
+          <td style="padding:12px 14px">${badge('bg-gray', insTypeLabel(r.insType)||'—')}</td>
+          <td style="padding:12px 14px;font-weight:700;color:var(--text)" dir="ltr">${ex.finalPremium ? fmtMoney(parseFloat(ex.finalPremium)) : '—'}</td>
+          <td style="padding:12px 14px;color:var(--text);font-family:'Inter',sans-serif" dir="ltr">${ex.policyStart||'—'}</td>
+          <td style="padding:12px 14px;color:var(--text);font-family:'Inter',sans-serif" dir="ltr">${policyEnd||'—'}</td>
+          <td style="padding:12px 14px">
+            <span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${statusBg};color:${statusColor}">${statusLabel}</span>
+          </td>
+          <td style="padding:12px 14px">
+            ${inst.length ? `<span style="font-size:12px;color:var(--text2)">${paidCount}/${inst.length} ${a('مدفوعة','paid')}</span>` : `<span style="font-size:12px;color:var(--text3)">—</span>`}
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+  </div>`}`;
+}
+
+function finPolicyDetailPage(){
+  const r = requests.find(x => String(x.id) === String(finPolCurrentId));
+  if(!r){ finPolMode='list'; return finPoliciesPage(); }
+  const ex = r.execution || {};
+  const clientName = salesClientName(r) || r.clientName || '—';
+  const c = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
+  const today = new Date().toISOString().slice(0,10);
+  const policyEnd = ex.policyEnd || '';
+  const isExpired = policyEnd && policyEnd < today;
+  const isExpiringSoon = !isExpired && policyEnd && policyEnd <= new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+  const statusLabel = isExpired ? a('منتهية','Expired') : isExpiringSoon ? a('تنتهي قريباً','Expiring Soon') : ex.policyEnd ? a('سارية','Active') : a('غير محدد','—');
+  const statusBg    = isExpired ? '#fee2e2' : isExpiringSoon ? '#fef3c7' : ex.policyEnd ? '#dcfce7' : '#f1f5f9';
+  const statusColor = isExpired ? '#dc2626' : isExpiringSoon ? '#b45309' : ex.policyEnd ? '#16a34a' : '#64748b';
+  const inst = r.installments || [];
+  const paidAmt   = inst.filter(x=>x.status==='paid').reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const totalAmt  = inst.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const pendingAmt= totalAmt - paidAmt;
+  const showComm = !isOpsEmp();
+  return `
+  <div class="sheet-bar">
+    <div class="sheet-bar-l">
+      <button class="btn btn-o btn-sm" onclick="finPolBack()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:${lang==='ar'?'scaleX(-1)':'none'}"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        ${a('رجوع','Back')}
+      </button>
+    </div>
+    <div class="sheet-bar-r">
+      <span style="font-size:11.5px;padding:4px 12px;border-radius:99px;font-weight:600;background:${statusBg};color:${statusColor}">${statusLabel}</span>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="sheet-photo" style="background:var(--blue)">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="sheet-head-main">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">${a('وثيقة تأمين','Insurance Policy')}</div>
+        <div style="font-size:26px;font-weight:900;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:.01em">${ex.policyNumber || a('بدون رقم','No Number')}</div>
+        <div style="font-size:13.5px;color:var(--text2);margin-top:6px;font-weight:500">${clientName}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:3px">${ex.insurer || ''}</div>
+      </div>
+    </div>
+
+    <!-- بيانات الوثيقة الأساسية -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-bottom:20px">
+      ${[
+        [a('نوع التأمين','Insurance Type'), insTypeLabel(r.insType)||'—'],
+        [a('شركة التأمين','Insurer'), ex.insurer||'—'],
+        [a('القسط الإجمالي','Total Premium'), ex.finalPremium ? fmtMoney(parseFloat(ex.finalPremium)) : '—'],
+        [a('طريقة الدفع','Payment Method'), {full:a('دفعة كاملة','Full Payment'),quarterly:a('دفعات ربع سنوية','Quarterly'),semi:a('دفعات نصف سنوية','Semi-Annual'),custom:a('مخصصة','Custom')}[ex.paymentMethod]||'—'],
+        [a('بداية التغطية','Coverage Start'), ex.policyStart||'—'],
+        [a('نهاية التغطية','Coverage End'), ex.policyEnd||'—'],
+      ].map(([label,val])=>`
+      <div style="padding:14px 16px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r)">
+        <div style="font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${label}</div>
+        <div style="font-size:13.5px;font-weight:600;color:var(--text)" dir="ltr">${val}</div>
+      </div>`).join('')}
+    </div>
+
+    ${showComm && ex.commissionAmt ? (()=>{
+      const commAmt = parseFloat(ex.commissionAmt)||0;
+      const vatAmt  = Math.round(commAmt * 0.15 * 100) / 100;
+      const iaFee   = Math.round(commAmt * 0.01 * 100) / 100;
+      const netComm = Math.round((commAmt - iaFee) * 100) / 100;
+      return `<div style="padding:14px 18px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:var(--r);margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">💰 ${a('تفاصيل العمولة','Commission Breakdown')}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;font-size:12.5px;color:var(--text2)">
+          <div>${a('نسبة العمولة:','Commission %:')} <b style="color:var(--text)">${ex.commissionPct||0}%</b></div>
+          <div>${a('عمولة الوسيط:','Broker comm.:')} <b style="color:var(--text)" dir="ltr">${fmtMoney(commAmt)}</b></div>
+          <div>${a('رسوم الهيئة (1%):','IA Fee (1%):')} <b style="color:#b8740f" dir="ltr">- ${fmtMoney(iaFee)}</b></div>
+          <div>${a('ضريبة القيمة المضافة (15%):','VAT (15%):')} <b dir="ltr">+ ${fmtMoney(vatAmt)}</b></div>
+          <div style="grid-column:1/-1;border-top:1px solid #86efac;padding-top:8px;margin-top:2px">${a('صافي العمولة:','Net Commission:')} <b style="color:#059669;font-size:14px" dir="ltr">${fmtMoney(netComm)}</b></div>
+        </div>
+      </div>`;
+    })() : ''}
+
+    <!-- جدول الدفعات المرتبطة -->
+    <div style="margin-bottom:20px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">${a('جدول الدفعات المرتبطة','Linked Payment Schedule')}</div>
+      ${inst.length === 0
+        ? `<div style="padding:20px;text-align:center;color:var(--text3);font-size:12.5px;border:1.5px dashed var(--border);border-radius:var(--r)">${a('لا توجد دفعات مسجّلة لهذه الوثيقة','No installments recorded for this policy')}</div>`
+        : `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="padding:10px 16px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac;font-size:12px;color:#15803d;font-weight:700">${a('محصَّل','Collected')} <span dir="ltr">${fmtMoney(paidAmt)}</span></div>
+          <div style="padding:10px 16px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d;font-size:12px;color:#b45309;font-weight:700">${a('معلّق','Pending')} <span dir="ltr">${fmtMoney(pendingAmt)}</span></div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden">
+          <thead><tr style="background:var(--bg);border-bottom:1.5px solid var(--border)">
+            <th style="padding:9px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">#</th>
+            <th style="padding:9px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('المبلغ','Amount')}</th>
+            <th style="padding:9px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('تاريخ الاستحقاق','Due Date')}</th>
+            <th style="padding:9px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('الحالة','Status')}</th>
+            <th style="padding:9px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2)">${a('تاريخ التحصيل','Collected On')}</th>
+            <th style="padding:9px 14px"></th>
+          </tr></thead>
+          <tbody>
+            ${inst.map((x,i)=>{
+              const due = x.dueDate||'';
+              const isPaid = x.status==='paid';
+              const isOverdue = !isPaid && due && due < today;
+              const isSoon = !isPaid && !isOverdue && due && due <= new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+              const dotColor = isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#d97706':'#94a3b8';
+              const statusBgI = isPaid?'#dcfce7':isOverdue?'#fee2e2':isSoon?'#fef3c7':'#f1f5f9';
+              const statusClr = isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#b45309':'#64748b';
+              const statusLbl = isPaid?a('محصَّل','Collected'):isOverdue?a('متأخر','Overdue'):isSoon?a('قريباً','Due Soon'):a('قادم','Upcoming');
+              return `<tr style="border-bottom:1px solid var(--border);background:${isOverdue&&!isPaid?'#fff5f5':isSoon&&!isPaid?'#fffbeb':''}">
+                <td style="padding:10px 14px;color:var(--text3)">
+                  <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${dotColor};margin-inline-end:6px"></span>${i+1}
+                </td>
+                <td style="padding:10px 14px;font-weight:700;color:var(--text)" dir="ltr">${fmtMoney(parseFloat(x.amount)||0)}</td>
+                <td style="padding:10px 14px;color:var(--text)" dir="ltr">${due||'—'}</td>
+                <td style="padding:10px 14px"><span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${statusBgI};color:${statusClr}">${statusLbl}</span></td>
+                <td style="padding:10px 14px;color:var(--text3)" dir="ltr">${x.paidDate||'—'}</td>
+                <td style="padding:8px 14px;text-align:end">
+                  ${isPaid
+                    ? `<button onclick="finDetMarkInstPaid('${r.id}',${i},false)" style="border:1.5px solid #86efac;background:#dcfce7;color:#15803d;padding:3px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">✓ ${a('تم','Done')}</button>`
+                    : `<button onclick="finDetMarkInstPaid('${r.id}',${i},true)" style="border:1.5px solid var(--blue);background:var(--blue);color:#fff;padding:3px 12px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">${a('تحصيل','Collect')}</button>`
+                  }
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`}
+    </div>
+
+    <!-- بيانات العميل -->
+    ${c ? `<div style="padding:14px 18px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r);margin-bottom:20px">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">${a('بيانات العميل','Client Details')}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;font-size:12.5px;color:var(--text2)">
+        <div>${a('الاسم:','Name:')} <b style="color:var(--text)">${c.name||'—'}</b></div>
+        <div>${a('المسؤول:','Contact:')} <b style="color:var(--text)">${c.person||'—'}</b></div>
+        <div dir="ltr">${a('الجوال:','Phone:')} <b style="color:var(--text)">${c.phone||'—'}</b></div>
+        <div dir="ltr">${a('البريد:','Email:')} <b style="color:var(--text)">${c.email||'—'}</b></div>
+      </div>
+    </div>` : ''}
+
+    <!-- الطلب الأصلي — مرجع فرعي -->
+    <div style="padding:10px 16px;background:var(--bg);border:1.5px dashed var(--border);border-radius:var(--r);display:flex;align-items:center;gap:10px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span style="font-size:11.5px;color:var(--text3)">${a('الطلب المرتبط / Linked Request Ref:','Linked Request Ref:')}</span>
+      <span style="font-family:'Inter',sans-serif;font-size:12px;font-weight:700;color:var(--text2)">${r.ref}</span>
+      <span style="font-size:11px;color:var(--text3);margin-inline-start:auto">${a('المندوب:','Sales Rep:')} ${r.assignedTo||'—'}</span>
+    </div>
+  </div>`;
+}
+function finDetMarkInstPaid(reqId, instIdx, isPaid){
+  const r = requests.find(x => String(x.id) === String(reqId));
+  if(!r||!r.installments?.[instIdx]) return;
+  r.installments[instIdx].status = isPaid ? 'paid' : 'pending';
+  if(isPaid) r.installments[instIdx].paidDate = new Date().toISOString().slice(0,10);
+  else delete r.installments[instIdx].paidDate;
+  sbSyncReq(reqId);
+  const c = document.getElementById('appContent'); if(c){ c.innerHTML=pgFin(); setTimeout(initFin,0); }
 }
 
 /* ══════════════════════════════════════════════════
