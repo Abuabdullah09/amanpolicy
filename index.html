@@ -3035,6 +3035,7 @@ function renderSalesList(){
         ${list.map(r => {
           const st = salesStatus(r.status);
           const clientName = salesClientName(r);
+          const stBadge = (r.status==='sent'&&r.opsStatus&&r.opsStatus!=='inbox') ? badge(opsStatus(r.opsStatus).cls, opsStatusLabel(r.opsStatus)) : badge(st.cls, salesStatusLabel(r.status));
           return `<tr style="cursor:pointer" onclick="salesOpen('${r.id}')">
             <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span>${(r.status==='sent'&&r.opsStatus==='sent_client')?` <span class="sl-followup-dot" title="${a('العرض أُرسل للعميل — يحتاج متابعة','Quote sent — follow up')}">●</span>`:''}</td>
             ${C.client?`<td style="font-weight:600">${clientName || '<span style="color:var(--text3)">'+a('بدون عميل','No client')+'</span>'}</td>`:''}
@@ -3043,7 +3044,7 @@ function renderSalesList(){
             ${C.classification?`<td style="font-size:12.5px">${insSubLabel(r.insType,r.subType)||'—'}</td>`:''}
             ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
             ${C.kind?`<td style="font-size:12.5px">${reqKindLabel(r.reqKind)||'—'}</td>`:''}
-            ${C.status?`<td>${badge(st.cls, salesStatusLabel(r.status))}</td>`:''}
+            ${C.status?`<td>${stBadge}</td>`:''}
             ${C.opsEmp?`<td style="font-size:12.5px">${(()=>{const hu=users.find(x=>x.user===r.handledBy);return hu?(lang==='ar'?hu.name:hu.nEn):(r.handledBy?r.handledBy:`<span style="color:var(--text3)">${a('غير مُسند','Unassigned')}</span>`);})()}</td>`:''}
             ${C.date?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.created||'—'}</td>`:''}
           </tr>`;
@@ -3063,6 +3064,7 @@ function renderSalesTbody(){
   tbody.innerHTML = list.length ? list.map(r => {
     const st = salesStatus(r.status);
     const clientName = salesClientName(r);
+    const stBadge = (r.status==='sent'&&r.opsStatus&&r.opsStatus!=='inbox') ? badge(opsStatus(r.opsStatus).cls, opsStatusLabel(r.opsStatus)) : badge(st.cls, salesStatusLabel(r.status));
     return `<tr style="cursor:pointer" onclick="salesOpen('${r.id}')">
       <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span>${(r.status==='sent'&&r.opsStatus==='sent_client')?` <span class="sl-followup-dot" title="${a('العرض أُرسل للعميل — يحتاج متابعة','Quote sent — follow up')}">●</span>`:''}</td>
       ${C.client?`<td style="font-weight:600">${clientName || '<span style="color:var(--text3)">'+a('بدون عميل','No client')+'</span>'}</td>`:''}
@@ -3071,7 +3073,7 @@ function renderSalesTbody(){
       ${C.classification?`<td style="font-size:12.5px">${insSubLabel(r.insType,r.subType)||'—'}</td>`:''}
       ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
       ${C.kind?`<td style="font-size:12.5px">${reqKindLabel(r.reqKind)||'—'}</td>`:''}
-      ${C.status?`<td>${badge(st.cls, salesStatusLabel(r.status))}</td>`:''}
+      ${C.status?`<td>${stBadge}</td>`:''}
       ${C.opsEmp?`<td style="font-size:12.5px">${(()=>{const hu=users.find(x=>x.user===r.handledBy);return hu?(lang==='ar'?hu.name:hu.nEn):(r.handledBy?r.handledBy:`<span style="color:var(--text3)">${a('غير مُسند','Unassigned')}</span>`);})()}</td>`:''}
       ${C.date?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.created||'—'}</td>`:''}
       <td></td>
@@ -3117,11 +3119,18 @@ function renderSalesCards(list){
   return `<div class="cc-grid">` + list.map(r => {
     const st = salesStatus(r.status);
     const clientName = salesClientName(r);
+    let statusBadge;
+    if(r.status === 'sent' && r.opsStatus && r.opsStatus !== 'inbox'){
+      const ops = opsStatus(r.opsStatus);
+      statusBadge = badge(ops.cls, opsStatusLabel(r.opsStatus));
+    } else {
+      statusBadge = badge(st.cls, salesStatusLabel(r.status));
+    }
     return `
     <div class="cc-card" onclick="salesOpen('${r.id}')">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <span style="font-family:'Inter',sans-serif;font-weight:800;color:var(--blue);font-size:14px">${r.ref}</span>
-        ${badge(st.cls, salesStatusLabel(r.status))}
+        ${statusBadge}
       </div>
       <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:5px">${clientName||a('بدون عميل','No client')}</div>
       <div style="font-size:12.5px;color:var(--text2)">${insTypeLabel(r.insType)}</div>
@@ -4217,7 +4226,9 @@ function salesComparisonSheet(r){
     return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">No quotes selected for comparison. Go back and check the quotes to include.</div>`;
   }
   const clientName = salesClientName(r) || r.clientName || 'Client';
-  const clientEmail = r.clientEmail || '';
+  const _cContact = r.contactId ? contacts.find(x => String(x.id) === String(r.contactId)) : null;
+  const clientEmail = r.clientEmail || (_cContact && _cContact.email) || '';
+  if(!r.clientEmail && clientEmail){ r.clientEmail = clientEmail; sbSyncReq(salesCurrentId); }
   const winnerIdx = r.winnerQuoteId ? (r.quotes||[]).findIndex(q => q.id === r.winnerQuoteId) : -1;
 
   const emailRows = selected.map((q,i)=>`${i+1}. ${q.insurer||'—'} | Quote No: ${q.quoteNo||'—'} | Valid Until: ${q.validUntil||'—'} | Total Premium: ${Number(q.premium||0).toLocaleString()} SAR`).join('%0A');
@@ -4942,7 +4953,25 @@ function opsTabContent(r, c){
       <div style="font-size:13px;color:#7f1d1d;line-height:1.6;white-space:pre-wrap">${r.revisionReason}</div>
     </div>` : ''}
     ${(r.insurers&&r.insurers.length) ? `<div style="margin-top:16px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:8px">${a('شركات التأمين المطلوبة','Requested Insurers')}</div><div class="sl-chips">${r.insurers.map(id=>{const ic=contacts.find(x=>String(x.id)===String(id));return ic?`<span class="sl-chip on" style="cursor:default">${ic.name}</span>`:'';}).join('')}</div></div>` : ''}
-    ${r.notes ? `<div style="margin-top:18px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:6px">${a('ملاحظات المبيعات','Sales Notes')}</div><div style="font-size:13.5px;color:var(--text);line-height:1.7;white-space:pre-wrap">${r.notes}</div></div>` : ''}`;
+    ${r.notes ? `<div style="margin-top:18px"><div style="font-size:12px;color:var(--text2);font-weight:700;margin-bottom:6px">${a('ملاحظات المبيعات','Sales Notes')}</div><div style="font-size:13.5px;color:var(--text);line-height:1.7;white-space:pre-wrap">${r.notes}</div></div>` : ''}
+    ${(()=>{
+      const docs = r.docs || [];
+      if(!docs.length) return '';
+      return `<div style="margin-top:20px;padding:14px 16px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r)">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">📎 Customer Initial Attachments</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${docs.map(d => {
+            const name = d.name || (typeof d==='string'?d:'');
+            const url  = d.url  || (typeof d==='string' && (d.startsWith('http')||d.startsWith('blob')) ? d : null);
+            return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--white)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span style="flex:1;font-size:12.5px;color:var(--text)">${name}</span>
+              ${url ? `<a class="qm-attach-btn" href="${url}" target="_blank" download title="${name}" style="font-size:11.5px">↓ Download</a>` : `<span style="font-size:11px;color:var(--text3)">No link</span>`}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    })()}`;
   }
   if(opsTab === 'quotes'){ return opsQuotesTab(r); }
   if(opsTab === 'execution'){
@@ -4958,12 +4987,32 @@ function opsTabContent(r, c){
       <div class="field-row"><span class="field-row-label">${a('نهاية الوثيقة','Policy End')}</span>
         <input type="date" id="ex-end" dir="ltr" value="${ex.policyEnd||''}" onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('القسط النهائي','Final Premium')}</span>
-        <input id="ex-premium" dir="ltr" type="number" step="0.01" value="${ex.finalPremium||''}" placeholder="0.00" onchange="opsSaveExecution()"></div>
+        <input id="ex-premium" dir="ltr" type="number" step="0.01" value="${ex.finalPremium||''}" placeholder="0.00" oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
       <div class="field-row"><span class="field-row-label">${a('نسبة العمولة %','Commission %')}</span>
-        <input id="ex-commpct" dir="ltr" type="number" step="0.01" value="${ex.commissionPct||''}" placeholder="0.00" onchange="opsSaveExecution()"></div>
-      <div class="field-row"><span class="field-row-label">${a('مبلغ العمولة','Commission Amt')}</span>
-        <input id="ex-commamt" dir="ltr" type="number" step="0.01" value="${ex.commissionAmt||''}" placeholder="0.00" onchange="opsSaveExecution()"></div>
+        <input id="ex-commpct" dir="ltr" type="number" step="0.01" value="${ex.commissionPct||''}" placeholder="0.00" oninput="exCalcComm()" onchange="opsSaveExecution()"></div>
+      <div class="field-row"><span class="field-row-label">${a('مبلغ العمولة (تلقائي)','Commission Amt (auto)')}</span>
+        <input id="ex-commamt" dir="ltr" type="number" step="0.01" value="${ex.commissionAmt||''}" placeholder="0.00" style="background:var(--bg);color:var(--text3)" readonly></div>
     </div>
+    ${(()=>{
+      const prem = parseFloat(ex.finalPremium||0);
+      const pct  = parseFloat(ex.commissionPct||0);
+      if(prem>0 && pct>0){
+        const commAmt = Math.round(prem * pct / 100 * 100) / 100;
+        const vatAmt  = Math.round(commAmt * 0.15 * 100) / 100;
+        const iaFee   = Math.round(commAmt * 0.01 * 100) / 100;
+        const netComm = Math.round((commAmt - iaFee) * 100) / 100;
+        return `<div style="margin-top:12px;padding:12px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:var(--r);font-size:12.5px">
+          <div style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">💰 ${a('تفاصيل العمولة','Commission Breakdown')}</div>
+          <div style="display:flex;flex-direction:column;gap:4px;color:var(--text2)">
+            <div>${a('عمولة الوسيط:','Broker commission:')} <b style="color:var(--text)" dir="ltr">${commAmt.toLocaleString()} ${a('ر.س','SAR')}</b></div>
+            <div>${a('رسوم هيئة التأمين (1%):','IA Fee (1%):')} <b dir="ltr" style="color:#b8740f">- ${iaFee.toLocaleString()} ${a('ر.س','SAR')}</b></div>
+            <div>${a('ضريبة القيمة المضافة (15%):','VAT (15%):')} <b dir="ltr" style="color:var(--text)">+ ${vatAmt.toLocaleString()} ${a('ر.س','SAR')}</b></div>
+            <div style="border-top:1px solid #86efac;margin-top:4px;padding-top:4px">${a('صافي العمولة (بعد الهيئة):','Net commission (after IA):')} <b style="color:#059669;font-size:14px" dir="ltr">${netComm.toLocaleString()} ${a('ر.س','SAR')}</b></div>
+          </div>
+        </div>`;
+      }
+      return '';
+    })()}
     <button class="btn btn-p btn-sm" style="margin-top:14px" onclick="opsSaveExecution(true)">${a('حفظ بيانات الوثيقة','Save Policy Data')}</button>`;
   }
   if(opsTab === 'invoice'){
@@ -5075,11 +5124,16 @@ function opsTabContent(r, c){
   if(opsTab === 'docs'){
     const docs = r.docs || [];
     if(!docs.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">${a('لا توجد مستندات','No documents')}</div>`;
-    return `<div style="display:flex;flex-direction:column;gap:8px">` + docs.map(d => `
+    return `<div style="display:flex;flex-direction:column;gap:8px">` + docs.map(d => {
+      const name = d.name || d || '';
+      const url  = d.url  || (typeof d === 'string' && (d.startsWith('http')||d.startsWith('blob')) ? d : null);
+      return `
       <div style="display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--border);border-radius:var(--r);background:var(--white)">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span style="flex:1;font-size:13px;color:var(--text)">${d.name||d}</span>
-      </div>`).join('') + `</div>`;
+        <span style="flex:1;font-size:13px;color:var(--text)">${name}</span>
+        ${url ? `<a class="qm-attach-btn" href="${url}" target="_blank" download title="${name}" style="font-size:11.5px">↓ ${a('تحميل','Download')}</a>` : `<span style="font-size:11.5px;color:var(--text3)">${a('لا يوجد رابط','No link')}</span>`}
+      </div>`;
+    }).join('') + `</div>`;
   }
   if(opsTab === 'history'){
     const hist = r.history || [];
@@ -5236,9 +5290,11 @@ function qmAttachBtn(name){
   if(!name) return '';
   const isUrl = name.startsWith('http://') || name.startsWith('https://');
   const href  = isUrl ? name : '#';
+  const dl    = isUrl ? 'download' : '';
   const onclick = isUrl ? '' : `onclick="event.preventDefault();alert('${a('الملف:','File:')} ${name.replace(/'/g,"\\'")}');"`;
   const icon = name.toLowerCase().includes('pdf') ? '📄' : name.toLowerCase().includes('benefit') || name.toLowerCase().includes('منافع') ? '📋' : name.toLowerCase().includes('network') || name.toLowerCase().includes('شبكة') ? '🏥' : '📎';
-  return `<a class="qm-attach-btn" href="${href}" target="_blank" ${onclick} title="${name}">${icon} ${name.length>38?name.slice(0,36)+'…':name} ↗</a>`;
+  const label = name.length>40 ? name.slice(0,38)+'…' : name;
+  return `<a class="qm-attach-btn" href="${href}" target="_blank" ${dl} ${onclick} title="${name}">${icon} ${label} <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:middle;opacity:.7"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>`;
 }
 function oqCalcComm(){
   const prem = parseFloat(document.getElementById('oq-premium')?.value || 0);
@@ -5527,6 +5583,13 @@ function opsSaveNotes(){
   sbSyncReq(opsCurrentId);
   alert(a('تم حفظ الملاحظات ✓','Notes saved ✓'));
 }
+function exCalcComm(){
+  const prem = parseFloat(document.getElementById('ex-premium')?.value || 0);
+  const pct  = parseFloat(document.getElementById('ex-commpct')?.value || 0);
+  const amtEl = document.getElementById('ex-commamt');
+  if(amtEl) amtEl.value = (pct > 0 && prem > 0) ? (Math.round(prem * pct / 100 * 100) / 100).toFixed(2) : '';
+}
+
 function opsSaveExecution(showAlert){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
@@ -5537,7 +5600,10 @@ function opsSaveExecution(showAlert){
   r.execution.policyEnd     = g('ex-end');
   r.execution.finalPremium  = parseFloat(g('ex-premium'))||0;
   r.execution.commissionPct = parseFloat(g('ex-commpct'))||0;
-  r.execution.commissionAmt = parseFloat(g('ex-commamt'))||0;
+  const calcAmt = (r.execution.finalPremium > 0 && r.execution.commissionPct > 0)
+    ? Math.round(r.execution.finalPremium * r.execution.commissionPct / 100 * 100) / 100
+    : (parseFloat(g('ex-commamt'))||0);
+  r.execution.commissionAmt = calcAmt;
   sbSyncReq(opsCurrentId);
   if(showAlert) alert(a('تم حفظ بيانات الوثيقة ✓','Policy data saved ✓'));
 }
