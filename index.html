@@ -955,8 +955,10 @@ html[dir="ltr"] .tb-nav-area.in-section:hover .tb-back-ic{transform:translateX(3
         <div class="fg full"><label class="flabel">Client Name</label><select class="fs" id="reqClientSelect"><option value="">-- اختر عميل --</option></select></div>
         <div class="fg"><label class="flabel">Insurance Type</label>
           <select class="fs" id="nr-type" dir="ltr">
-            <option>طبي</option><option>مركبات</option><option>ممتلكات</option>
-            <option>هندسي</option><option>بحري</option><option>حماية</option><option>مسؤولية</option>
+            <option value="">-- اختر نوع التأمين --</option>
+            <option value="medical">طبي / Medical</option>
+            <option value="motor">مركبات / Motor</option>
+            <option value="general">عام / General</option>
           </select>
         </div>
         <div class="fg"><label class="flabel">Priority</label>
@@ -1397,15 +1399,73 @@ const INS_TIERS = [
 ];
 function insTierLabel(id){ const t = INS_TIERS.find(x=>x.id===id); return t?(lang==='ar'?t.ar:t.en):(id||''); }
 
-// التصنيفات الفرعية لكل نوع تأمين (مرنة — المدير يعدّلها لاحقاً)
-const INS_SUBTYPES = {
-  medical: [{id:'m1',ar:'تصنيف مبدئي 1',en:'Class 1'},{id:'m2',ar:'تصنيف مبدئي 2',en:'Class 2'}],
-  motor:   [{id:'mo1',ar:'تصنيف مبدئي 1',en:'Class 1'},{id:'mo2',ar:'تصنيف مبدئي 2',en:'Class 2'}],
-  general: [{id:'g1',ar:'تصنيف مبدئي 1',en:'Class 1'},{id:'g2',ar:'تصنيف مبدئي 2',en:'Class 2'}],
+// تصنيفات نوع المركبات
+const INS_MOTOR_CLASSES = [
+  {id:'comprehensive', ar:'شامل',      en:'Comprehensive'},
+  {id:'tpl',           ar:'طرف ثالث', en:'Third Party Liability'},
+];
+// تصنيفات التأمين العام
+const INS_GENERAL_CLASSES = [
+  {id:'marine',           ar:'بحري',          en:'Marine'},
+  {id:'property',         ar:'ممتلكات',        en:'Property'},
+  {id:'engineering',      ar:'هندسي',          en:'Engineering'},
+  {id:'general_accident', ar:'حوادث عامة',     en:'General Accident'},
+];
+// التصنيفات الفرعية لكل تصنيف عام
+const INS_GENERAL_SUBTYPES = {
+  marine: [
+    {id:'MCI', ar:'شحن بحري (MCI)',         en:'Marine Cargo (MCI)'},
+    {id:'MHI', ar:'هيكل السفينة (MHI)',      en:'Marine Hull (MHI)'},
+    {id:'LTI', ar:'عبور بري (LTI)',           en:'Land Transit (LTI)'},
+  ],
+  property: [
+    {id:'FI',  ar:'حريق وبرق (FI)',                   en:'Fire & Lightning (FI)'},
+    {id:'FAP', ar:'حريق وحوادث إضافية (FAP)',           en:'Fire & Allied Perils (FAP)'},
+    {id:'PAR', ar:'جميع مخاطر الممتلكات (PAR)',         en:'Property All Risks (PAR)'},
+    {id:'IAR', ar:'جميع المخاطر الصناعية (IAR)',        en:'Industrial All Risks (IAR)'},
+    {id:'HI',  ar:'تأمين المنزل (HI)',                  en:'Homeowners Insurance (HI)'},
+  ],
+  engineering: [
+    {id:'CAR',  ar:'مشاريع البناء (CAR)',                    en:'Contractors All Risks (CAR)'},
+    {id:'EAR',  ar:'مشاريع التركيب (EAR)',                   en:'Erection All Risks (EAR)'},
+    {id:'CPM',  ar:'آلات المقاولين (CPM)',                    en:'Contractors Plant & Machinery (CPM)'},
+    {id:'MBD',  ar:'أعطال الآلات (MBD)',                     en:'Machinery Breakdown (MBD)'},
+    {id:'MLOP', ar:'خسارة أرباح الآلات (MLOP)',              en:'Machinery Loss of Profits (MLOP)'},
+    {id:'BPV',  ar:'مراجل الضغط والأوعية (BPV)',             en:'Boiler & Pressure Vessels (BPV)'},
+    {id:'EEI',  ar:'المعدات الإلكترونية (EEI)',               en:'Electronic Equipment Insurance (EEI)'},
+    {id:'DOS',  ar:'تدهور المخزون (DOS)',                     en:'Deterioration of Stock (DOS)'},
+  ],
+  general_accident: [
+    {id:'CGL',   ar:'مسؤولية مدنية عامة (CGL)',              en:'Commercial General Liability (CGL)'},
+    {id:'PL',    ar:'مسؤولية المنتجات (PL)',                  en:'Products Liability (PL)'},
+    {id:'MOL',   ar:'المسؤولية الطبية (MOL)',                 en:'Medical Malpractice (MOL)'},
+    {id:'AVLL',  ar:'مسؤولية الطيران (AVLL)',                 en:'Aviation Liability (AVLL)'},
+    {id:'PROL',  ar:'مسؤولية مهنية (PROL)',                   en:'Professional Liability (PROL)'},
+    {id:'PII',   ar:'التعويض المهني (PII)',                   en:'Professional Indemnity Insurance (PII)'},
+    {id:'MMPI',  ar:'سوء التصرف الطبي (MMPI)',                en:'Medical Malpractice Professional (MMPI)'},
+    {id:'MI',    ar:'التأمين المتنوع (MI)',                   en:'Miscellaneous Insurance (MI)'},
+    {id:'FGI',   ar:'ضمان الأمانة (FGI)',                    en:'Fidelity Guarantee Insurance (FGI)'},
+    {id:'WC_EL', ar:'تعويضات العمال (WC & EL)',              en:"Workmen's Compensation (WC & EL)"},
+    {id:'PA',    ar:'حوادث شخصية (PA)',                      en:'Personal Accidents (PA)'},
+  ],
 };
-function insSubtypes(typeId){ return INS_SUBTYPES[typeId] || []; }
-function insSubLabel(typeId, subId){
-  const s = (INS_SUBTYPES[typeId]||[]).find(x => x.id === subId);
+function insSubtypes(typeId){ return []; }
+function insSubLabel(typeId, classId){
+  if(!classId) return '';
+  if(typeId === 'motor'){
+    const c = INS_MOTOR_CLASSES.find(x => x.id === classId);
+    return c ? (lang==='ar'?c.ar:c.en) : (classId||'');
+  }
+  if(typeId === 'general'){
+    const c = INS_GENERAL_CLASSES.find(x => x.id === classId);
+    return c ? (lang==='ar'?c.ar:c.en) : (classId||'');
+  }
+  return classId || '';
+}
+function insSubClassLabel(classId, subId){
+  if(!classId || !subId) return '';
+  const subs = INS_GENERAL_SUBTYPES[classId] || [];
+  const s = subs.find(x => x.id === subId);
   return s ? (lang==='ar'?s.ar:s.en) : (subId||'');
 }
 
@@ -3112,7 +3172,8 @@ function salesTabContent(r, c){
     <div class="field-grid">
       ${salesVRow(a('حجم الشركة','Company Size'), compSizeLabel(r.compSize))}
       ${salesVRow(a('نوع التأمين','Insurance Type'), insTypeLabel(r.insType))}
-      ${salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType))}
+      ${(r.insType !== 'medical' && r.subType) ? salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType)) : ''}
+      ${(r.insType === 'general' && r.subClassification) ? salesVRow(a('التصنيف الفرعي','Sub-Classification'), insSubClassLabel(r.subType, r.subClassification)) : ''}
       ${salesVRow(a('خاص / عادي','Special / Standard'), insTierLabel(r.tier))}
       ${salesVRow(a('نوع الطلب','Request Kind'), reqKindLabel(r.reqKind))}
       ${salesVRow(a('الحالة','Status'), salesStatusLabel(r.status))}
@@ -3297,8 +3358,11 @@ function salesEditSheet(){
           ${insuranceTypes.map(it=>`<option value="${it.id}" ${r&&r.insType===it.id?'selected':''}>${lang==='ar'?it.ar:it.en}</option>`).join('')}
         </select>
       </div>
-      <div class="field-row"><span class="field-row-label">${a('التصنيف','Classification')}</span>
-        <select id="sl-subtype">${salesSubtypeOptions(r?r.insType:null, r?r.subType:'')}</select>
+      <div class="field-row" id="sl-class-row" style="${(!r || !r.insType || r.insType==='medical')?'display:none':''}"><span class="field-row-label">${a('التصنيف','Classification')}</span>
+        <select id="sl-classification" onchange="salesClassChanged()">${salesClassOptions(r?r.insType:null, r?r.subType:'')}</select>
+      </div>
+      <div class="field-row" id="sl-subtype-row" style="${(!r || r.insType!=='general' || !r.subType)?'display:none':''}"><span class="field-row-label">${a('التصنيف الفرعي','Sub-Classification')}</span>
+        <select id="sl-subtype">${salesSubtypeOptions(r?r.subType:null, r?r.subClassification:'')}</select>
       </div>
       <div class="field-row"><span class="field-row-label">${a('خاص / عادي','Special / Standard')}</span>
         <select id="sl-tier">
@@ -3343,23 +3407,61 @@ function salesEditSheet(){
 
 
 
-/* خيارات التصنيف الفرعي حسب نوع التأمين */
-function salesSubtypeOptions(typeId, selected){
-  if(!typeId) return `<option value="" disabled selected>${a('اختر نوع التأمين أولاً','Select insurance type first')}</option>`;
-  const subs = insSubtypes(typeId);
-  if(!subs.length) return `<option value="">${a('— لا يوجد —','— None —')}</option>`;
-  const placeholder = !selected ? `<option value="" disabled selected>${a('اختر','Select')}</option>` : '';
-  return placeholder + subs.map(s => `<option value="${s.id}" ${selected===s.id?'selected':''}>${lang==='ar'?s.ar:s.en}</option>`).join('');
+/* خيارات التصنيف حسب نوع التأمين */
+function salesClassOptions(typeId, selectedClass){
+  if(typeId === 'motor'){
+    const ph = !selectedClass ? `<option value="" disabled selected>${a('اختر','Select')}</option>` : '';
+    return ph + INS_MOTOR_CLASSES.map(c => `<option value="${c.id}" ${selectedClass===c.id?'selected':''}>${lang==='ar'?c.ar:c.en}</option>`).join('');
+  }
+  if(typeId === 'general'){
+    const ph = !selectedClass ? `<option value="" disabled selected>${a('اختر','Select')}</option>` : '';
+    return ph + INS_GENERAL_CLASSES.map(c => `<option value="${c.id}" ${selectedClass===c.id?'selected':''}>${lang==='ar'?c.ar:c.en}</option>`).join('');
+  }
+  return `<option value="">${a('— —','— —')}</option>`;
 }
-/* لما يتغيّر نوع التأمين: نحدّث التصنيف الفرعي + المستندات */
+/* خيارات التصنيف الفرعي حسب التصنيف العام */
+function salesSubtypeOptions(classId, selectedSub){
+  if(!classId) return `<option value="" disabled selected>${a('اختر التصنيف أولاً','Select classification first')}</option>`;
+  const subs = INS_GENERAL_SUBTYPES[classId] || [];
+  if(!subs.length) return `<option value="">${a('— لا يوجد —','— None —')}</option>`;
+  const ph = !selectedSub ? `<option value="" disabled selected>${a('اختر','Select')}</option>` : '';
+  return ph + subs.map(s => `<option value="${s.id}" ${selectedSub===s.id?'selected':''}>${lang==='ar'?s.ar:s.en}</option>`).join('');
+}
+/* لما يتغيّر نوع التأمين: منطق متتالي للتصنيف والتصنيف الفرعي */
 function salesTypeChanged(){
   const typeId = document.getElementById('sl-instype').value;
-  const sub = document.getElementById('sl-subtype');
-  if(sub) sub.innerHTML = salesSubtypeOptions(typeId || null, '');
-  // نحدّث المستندات لو تبويب المستندات ظاهر
+  const classRow = document.getElementById('sl-class-row');
+  const subRow = document.getElementById('sl-subtype-row');
+  const classEl = document.getElementById('sl-classification');
+  const subEl = document.getElementById('sl-subtype');
+  if(typeId === 'medical'){
+    if(classRow) classRow.style.display = 'none';
+    if(subRow) subRow.style.display = 'none';
+  } else if(typeId === 'motor'){
+    if(classRow) classRow.style.display = '';
+    if(classEl) classEl.innerHTML = salesClassOptions('motor', '');
+    if(subRow) subRow.style.display = 'none';
+  } else if(typeId === 'general'){
+    if(classRow) classRow.style.display = '';
+    if(classEl) classEl.innerHTML = salesClassOptions('general', '');
+    if(subRow) subRow.style.display = 'none';
+  }
   const docsList = document.getElementById('sl-docs-list');
   if(docsList && salesEditTab === 'docs'){
     docsList.innerHTML = salesRenderDocs();
+  }
+}
+/* لما يتغيّر التصنيف: نحدّث التصنيف الفرعي */
+function salesClassChanged(){
+  const typeId = document.getElementById('sl-instype').value;
+  const classId = (document.getElementById('sl-classification')||{}).value || '';
+  const subRow = document.getElementById('sl-subtype-row');
+  const subEl = document.getElementById('sl-subtype');
+  if(typeId === 'general' && classId){
+    if(subRow) subRow.style.display = '';
+    if(subEl) subEl.innerHTML = salesSubtypeOptions(classId, '');
+  } else {
+    if(subRow) subRow.style.display = 'none';
   }
 }
 
@@ -3598,7 +3700,8 @@ async function salesSave(){
     clientName: c ? c.name : '',
     compSize: g('sl-size'),
     insType: g('sl-instype'),
-    subType: g('sl-subtype'),
+    subType: g('sl-classification'),
+    subClassification: g('sl-subtype'),
     tier: g('sl-tier'),
     reqKind: g('sl-reqkind') || 'new',
     insurers: [...salesTmpInsurers],
@@ -4253,7 +4356,7 @@ function renderOpsTable(list){
                   class="fs"
                   style="font-size:12px;max-width:130px">
                   <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-                  ${users.filter(u=>u.dept==='operations'&&u.role==='employee').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+                  ${users.filter(u=>u.dept==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
                 </select>
                 <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
                   class="btn btn-p btn-sm" style="padding:3px 8px;font-size:11px;white-space:nowrap">
@@ -4292,7 +4395,7 @@ function renderOpsCards(list){
             class="fs"
             style="flex:1;font-size:12px">
             <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-            ${users.filter(u=>u.dept==='operations'&&u.role==='employee').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+            ${users.filter(u=>u.dept==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
           </select>
           <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
             class="btn btn-p btn-sm" style="padding:4px 10px;font-size:11.5px;white-space:nowrap">
@@ -4453,13 +4556,14 @@ function opsTabContent(r, c){
   if(opsTab === 'info'){
     const assignedUser  = users.find(u => u.user === r.assignedTo);
     const handledUser   = r.handledBy ? users.find(u => u.user === r.handledBy) : null;
-    const opsEmployees  = users.filter(u => u.dept === 'operations' && u.role === 'employee');
+    const opsEmployees  = users.filter(u => u.dept === 'operations');
     const isInbox       = (r.opsStatus || 'inbox') === 'inbox';
     return `
     <div class="field-grid">
       ${salesVRow(a('حجم الشركة','Company Size'), compSizeLabel(r.compSize))}
       ${salesVRow(a('نوع التأمين','Type'), insTypeLabel(r.insType))}
-      ${salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType))}
+      ${(r.insType !== 'medical' && r.subType) ? salesVRow(a('التصنيف','Classification'), insSubLabel(r.insType, r.subType)) : ''}
+      ${(r.insType === 'general' && r.subClassification) ? salesVRow(a('التصنيف الفرعي','Sub-Classification'), insSubClassLabel(r.subType, r.subClassification)) : ''}
       ${salesVRow(a('خاص / عادي','Special / Standard'), insTierLabel(r.tier))}
       ${salesVRow(a('نوع الطلب','Request Kind'), reqKindLabel(r.reqKind))}
       ${salesVRow(a('مندوب المبيعات','Sales Rep'), assignedUser ? (lang==='ar'?assignedUser.name:assignedUser.nEn) : (r.assignedTo||'—'))}
