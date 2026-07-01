@@ -730,6 +730,15 @@ html[dir="rtl"] .field-row span[dir="ltr"]{ text-align: left; }
 .qm-form-section-title{font-size:11.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;}
 .qm-form-int{padding:14px;background:rgba(220,38,38,.03);border:1.5px solid #fca5a5;border-radius:var(--r);margin-top:10px;}
 [data-theme="dark"] .qm-form-int{background:rgba(220,38,38,.07);}
+.qm-attach-btn{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--blue);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px 9px;cursor:pointer;text-decoration:none;transition:background .13s,color .13s,border-color .13s;margin-top:2px;}
+.qm-attach-btn:hover{background:var(--blue);color:#fff;border-color:var(--blue);}
+[data-theme="dark"] .qm-attach-btn:hover{background:var(--blue);}
+.qm-cb{width:17px;height:17px;accent-color:var(--blue);cursor:pointer;flex-shrink:0;margin:0;}
+.qm-select-row{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(29,78,216,.05);border-top:1px solid var(--border);cursor:pointer;user-select:none;transition:background .13s;}
+.qm-select-row:hover{background:rgba(29,78,216,.1);}
+.qm-select-row.selected{background:rgba(29,78,216,.08);}
+[data-theme="dark"] .qm-select-row{background:rgba(29,78,216,.08);}
+[data-theme="dark"] .qm-select-row:hover{background:rgba(29,78,216,.15);}
 
 /* ════════ الداش بورد ════════ */
 .dash-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
@@ -1723,6 +1732,37 @@ function subscribeNotifs(){
 }
 const setupNotificationsRealtime = subscribeNotifs;
 
+/* ══ Realtime لجدول الطلبات — تحديث فوري بدون Refresh ══ */
+let _reqChannel = null;
+function subscribeRequests(){
+  if(!curUser) return;
+  if(_reqChannel){ try{ sb.removeChannel(_reqChannel); }catch(e){} _reqChannel = null; }
+  _reqChannel = sb.channel('erp-requests-rt')
+    .on('postgres_changes', {event:'UPDATE', schema:'public', table:'requests'}, (payload) => {
+      const row = payload.new;
+      if(!row || !row.id) return;
+      const updated = row.data ? {...row.data, id: String(row.id)} : null;
+      if(!updated) return;
+      const idx = requests.findIndex(x => String(x.id) === String(row.id));
+      if(idx >= 0){ requests[idx] = updated; }
+      else { requests.push(updated); }
+      if(curPage === 'sales'){
+        if(salesMode === 'view' && salesCurrentId === updated.id){ navigate('sales'); }
+        else if(salesMode === 'list'){ navigate('sales'); }
+      }
+      if(curPage === 'operations'){
+        if(opsMode === 'view' && opsCurrentId === updated.id){ navigate('operations'); }
+        else if(opsMode === 'list'){ navigate('operations'); }
+      }
+    });
+  try {
+    _reqChannel.subscribe((status) => {
+      if(status === 'SUBSCRIBED') console.log('[requests] realtime active');
+      if(status === 'CHANNEL_ERROR') console.warn('[requests] realtime error — add requests table to Supabase publication');
+    });
+  } catch(e){ console.warn('[requests] subscribe failed', e); }
+}
+
 document.addEventListener('click', e => {
   const panel = document.getElementById('notif-panel');
   if(panel && panel.style.display === 'block' && !e.target.closest('#notif-panel') && !e.target.closest('#notifBtn')){
@@ -2159,6 +2199,7 @@ async function afterLogin(user){
     notifications = [];
   }
   subscribeNotifs();
+  subscribeRequests();
   updateNotifBadge();
 }
 
@@ -2170,6 +2211,7 @@ async function initApp(){
     if(event==='SIGNED_IN'  && session) await afterLogin(session.user);
     if(event==='SIGNED_OUT'){
       if(_notifChannel){ try{ sb.removeChannel(_notifChannel); }catch(e){} _notifChannel=null; }
+      if(_reqChannel){ try{ sb.removeChannel(_reqChannel); }catch(e){} _reqChannel=null; }
       curUser=null; contacts=[]; requests=[]; employees=[]; notifications=[];
     }
   });
@@ -3264,90 +3306,92 @@ function salesTabContent(r, c){
   }
   if(salesTab === 'quotes'){
     const quotes = r.quotes || [];
-    const opsStLabel = opsStatusLabel(r.opsStatus||'inbox');
     const canDecide  = r.opsStatus === 'sent_client';
     const isReady    = r.opsStatus === 'ready_to_send';
 
-    if(isReady){
-      return salesComparisonSheet(r);
-    }
+    if(isReady){ return salesComparisonSheet(r); }
 
-    if(!quotes.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">${a('لا توجد عروض أسعار بعد','No quotes yet')}</div>`;
+    if(!quotes.length) return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">No quotes have been submitted yet.</div>`;
 
-    const pendingCount  = quotes.filter(q => q.status === 'pending').length;
-    const approvedCount = quotes.filter(q => q.status === 'approved').length;
+    const selectedCount = quotes.filter(q => q.selectedForClient).length;
     const revisionCount = quotes.filter(q => q.status === 'revision').length;
 
     let html = `
-    <div style="margin-bottom:16px;padding:12px 14px;background:var(--bg);border-radius:var(--r);font-size:12.5px;color:var(--text2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div>${a('حالة الأوبريشن:','Ops Status:')} <b style="color:var(--text)">${opsStLabel}</b>
-        ${canDecide ? ` <span style="color:var(--blue);font-weight:600;margin-${lang==='ar'?'right':'left'}:6px">${a('· راجع كل عرض وأعطِ قرارك','· Review each quote and decide')}</span>` : ''}
+    <div style="margin-bottom:16px;padding:12px 16px;background:var(--bg);border-radius:var(--r);font-size:12.5px;color:var(--text2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div>
+        <b style="color:var(--text)">Quotes Review Panel</b>
+        ${canDecide ? `<span style="color:var(--blue);font-weight:600;margin-left:8px">· Check the quotes to include in the client comparison table</span>` : ''}
       </div>
-      ${canDecide && quotes.length > 0 ? `<div style="display:flex;gap:8px;align-items:center;font-size:12px">
-        <span style="color:var(--text3)">${a('معتمد:','Approved:')} <b style="color:#059669">${approvedCount}</b></span>
-        <span style="color:var(--text3)">${a('تعديل:','Revision:')} <b style="color:#f59e0b">${revisionCount}</b></span>
-        <span style="color:var(--text3)">${a('بانتظار:','Pending:')} <b>${pendingCount}</b></span>
+      ${canDecide ? `<div style="display:flex;gap:12px;font-size:12px">
+        <span>Selected for Client: <b style="color:#059669">${selectedCount}</b></span>
+        <span>Revision Requested: <b style="color:#f59e0b">${revisionCount}</b></span>
+        <span>Total: <b>${quotes.length}</b></span>
       </div>` : ''}
     </div>`;
 
     html += quotes.map((q, i) => {
-      const statusCls = q.status==='approved'?'qm-approved':q.status==='revision'?'qm-revision':'';
-      const statusLbl = q.status==='approved'
-        ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:#d1fae5;color:#065f46">${a('✅ معتمد','✅ Approved')}</span>`
+      const isSel = !!q.selectedForClient;
+      const selCls = isSel ? 'qm-approved' : (q.status==='revision' ? 'qm-revision' : '');
+      const selBadge = isSel
+        ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:#d1fae5;color:#065f46">✅ Selected for Client</span>`
         : q.status==='revision'
-        ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:#fef3c7;color:#92400e">${a('🔄 يحتاج تعديل','🔄 Revision')}</span>`
-        : `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;background:var(--bg);color:var(--text3)">${a('⏳ قيد الانتظار','⏳ Pending')}</span>`;
+        ? `<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:#fef3c7;color:#92400e">🔄 Revision Requested</span>`
+        : `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;background:var(--bg);color:var(--text3)">⏳ Pending Decision</span>`;
       return `
-      <div class="qm-quote-card ${statusCls}">
+      <div class="qm-quote-card ${selCls}">
         <div class="qm-card-top">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span style="font-size:14px;font-weight:700;color:var(--text)">${q.insurer||a('شركة غير محددة','Unspecified')}</span>
-            ${statusLbl}
+            <span style="font-size:14px;font-weight:700;color:var(--text)">${q.insurer||'Unspecified Insurer'}</span>
+            ${selBadge}
           </div>
         </div>
         <div class="qm-card-body">
           <div class="qm-ext">
-            <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">${a('البيانات الخارجية','External Data')}</div>
+            <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">External Data</div>
             <div style="display:flex;flex-direction:column;gap:5px">
-              ${q.quoteNo?`<div style="font-size:12.5px;color:var(--text2)">${a('رقم العرض:','Quote No.')} <b style="color:var(--text)" dir="ltr">${q.quoteNo}</b></div>`:''}
-              ${q.validUntil?`<div style="font-size:12.5px;color:var(--text2)">${a('صالح حتى:','Valid Until:')} <b dir="ltr">${q.validUntil}</b></div>`:''}
-              <div style="font-size:13.5px;color:var(--text2)">${a('القسط الإجمالي:','Total Premium:')} <b style="color:var(--blue);font-size:15px" dir="ltr">${Number(q.premium||0).toLocaleString()} ${a('ر.س','SAR')}</b></div>
+              ${q.quoteNo?`<div style="font-size:12.5px;color:var(--text2)">Quote No.: <b style="color:var(--text)" dir="ltr">${q.quoteNo}</b></div>`:''}
+              ${q.validUntil?`<div style="font-size:12.5px;color:var(--text2)">Valid Until: <b dir="ltr">${q.validUntil}</b></div>`:''}
+              <div style="font-size:13.5px;color:var(--text2)">Total Premium: <b style="color:var(--blue);font-size:15px" dir="ltr">${Number(q.premium||0).toLocaleString()} SAR</b></div>
             </div>
-            <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">
-              ${q.attachPdf?`<span style="font-size:12px;color:var(--blue)">📄 ${q.attachPdf}</span>`:''}
-              ${q.attachBenefits?`<span style="font-size:12px;color:var(--text2)">📋 ${q.attachBenefits}</span>`:''}
-              ${q.attachNetwork?`<span style="font-size:12px;color:var(--text2)">🏥 ${q.attachNetwork}</span>`:''}
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">
+              ${q.attachPdf?qmAttachBtn(q.attachPdf):''}
+              ${q.attachBenefits?qmAttachBtn(q.attachBenefits):''}
+              ${q.attachNetwork?qmAttachBtn(q.attachNetwork):''}
             </div>
           </div>
           <div class="qm-int">
-            <div class="qm-secret" style="margin-bottom:8px">🔒 ${a('سري جداً','Confidential')}</div>
+            <div class="qm-secret" style="margin-bottom:8px">🔒 Confidential</div>
             <div style="display:flex;flex-direction:column;gap:5px">
-              ${q.commissionPct?`<div style="font-size:12.5px;color:var(--text2)">${a('نسبة العمولة:','Commission %:')} <b dir="ltr">${q.commissionPct}%</b></div>`:''}
-              ${q.commissionAmt?`<div style="font-size:13px;color:var(--text2)">${a('قيمة العمولة المتوقعة:','Expected Comm:')} <b style="color:#059669;font-size:14px" dir="ltr">${Number(q.commissionAmt||0).toLocaleString()} ${a('ر.س','SAR')}</b></div>`:''}
+              ${q.commissionPct?`<div style="font-size:12.5px;color:var(--text2)">Commission %: <b dir="ltr">${q.commissionPct}%</b></div>`:''}
+              ${q.commissionAmt?`<div style="font-size:13px;color:var(--text2)">Expected Commission: <b style="color:#059669;font-size:14px" dir="ltr">${Number(q.commissionAmt||0).toLocaleString()} SAR</b></div>`:''}
             </div>
-            ${(q.status==='revision'&&q.revisionNotes)?`<div style="margin-top:8px;padding:7px 10px;background:#fef3c7;border-radius:6px;font-size:12px;color:#92400e"><b>${a('ملاحظة:','Note:')}</b> ${q.revisionNotes}</div>`:''}
+            ${(q.status==='revision'&&q.revisionNotes)?`<div style="margin-top:8px;padding:7px 10px;background:#fef3c7;border-radius:6px;font-size:12px;color:#92400e"><b>Revision note:</b> ${q.revisionNotes}</div>`:''}
           </div>
         </div>
         ${q.notes?`<div style="padding:8px 16px 10px;font-size:12px;color:var(--text3);border-top:1px solid var(--border);font-style:italic">${q.notes}</div>`:''}
         ${canDecide ? `<div class="qm-card-foot">
-          <div style="font-size:12px;color:var(--text3)">${a('قرارك على هذا العرض:','Your decision on this quote:')}</div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-p btn-sm" onclick="salesQuoteApproveItem(${i})" style="font-size:12px">${a('✅ اعتماد','✅ Approve')}</button>
-            <button class="btn btn-o btn-sm" onclick="salesQuoteRevisionItem(${i})" style="font-size:12px;color:var(--blue)">${a('🔄 تعديل مطلوب','🔄 Request Revision')}</button>
+          <label class="qm-select-row ${isSel?'selected':''}" style="flex:1;border:none;margin:0;padding:0;background:transparent" onclick="salesQuoteToggleSelect(${i})">
+            <input type="checkbox" class="qm-cb" ${isSel?'checked':''} onchange="salesQuoteToggleSelect(${i})" onclick="event.stopPropagation()">
+            <span style="font-size:12.5px;font-weight:600;color:var(--text)">Include in Client Comparison Table</span>
+          </label>
+          <div style="display:flex;gap:8px;margin-right:4px">
+            <button class="btn btn-o btn-sm" onclick="salesQuoteRevisionItem(${i})" style="font-size:12px;color:#b8740f" title="Request revision from Ops">🔄 Request Revision</button>
           </div>
         </div>` : ''}
       </div>`;
     }).join('');
 
     if(canDecide && quotes.length > 0){
-      const allDecided = quotes.every(q => q.status === 'approved' || q.status === 'revision');
+      const hasSelected = quotes.some(q => q.selectedForClient);
       html += `
       <div style="margin-top:18px;padding:14px 16px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border)">
-        ${!allDecided ? `<div style="font-size:12.5px;color:#b8740f;font-weight:600;margin-bottom:10px">⚠ ${a('يوجد عروض لم تُعطِ عليها قراراً بعد','Some quotes have not been decided yet')}</div>` : ''}
+        ${!hasSelected ? `<div style="font-size:12.5px;color:#b8740f;font-weight:600;margin-bottom:10px">⚠ Select at least one quote to include in the client comparison table.</div>` : ''}
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-          <div style="font-size:12.5px;color:var(--text2)">${a('بعد إعطاء قرارك على جميع العروض، اضغط "إرسال القرارات":','After deciding on all quotes, press "Submit Decisions":')}</div>
-          <button class="btn btn-p" onclick="salesSubmitQuoteDecisions()" ${!allDecided?'style="opacity:.65"':''}>
-            ${a('إرسال القرارات للأوبريشن','Submit Decisions to Ops')} ✓
+          <div style="font-size:12.5px;color:var(--text2)">
+            ${hasSelected ? `<b style="color:#059669">${selectedCount} quote(s)</b> selected for comparison.${revisionCount?` <b style="color:#f59e0b">${revisionCount}</b> sent back to Ops for revision.`:''}` : 'Check the quotes you want to include, then submit your decisions.'}
+          </div>
+          <button class="btn btn-p" onclick="salesSubmitQuoteDecisions()" ${!hasSelected?'disabled style="opacity:.5;cursor:not-allowed"':''}>
+            Submit Decisions ✓
           </button>
         </div>
       </div>`;
@@ -3893,6 +3937,25 @@ function salesRecall(){
 let salesApprovalDocs = [];
 
 // المبيعات: يعتمد العرض (موافقة العميل) — يفتح نافذة لرفع الإثبات
+function qmSaveClientEmail(val){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r) return;
+  r.clientEmail = val.trim();
+  sbSyncReq(salesCurrentId);
+}
+
+function salesApproveWinnerQuote(quoteId){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r || !r.quotes) return;
+  const q = r.quotes.find(x => String(x.id) === String(quoteId));
+  if(!q){ alert('Quote not found.'); return; }
+  if(!confirm(`Approve "${q.insurer||'this quote'}" (${Number(q.premium||0).toLocaleString()} SAR) and proceed to execution?`)) return;
+  r.winnerQuoteId = quoteId;
+  r.quotes.forEach(x => { x.status = (String(x.id) === String(quoteId)) ? 'approved' : (x.selectedForClient && String(x.id) !== String(quoteId) ? x.status : x.status); });
+  sbSyncReq(salesCurrentId);
+  salesViewSetTab('quotes');
+}
+
 function salesApproveQuote(){
   const r = requests.find(x => x.id === salesCurrentId);
   if(!r) return;
@@ -4076,6 +4139,14 @@ function salesDecide_Cancel(){
    ════════════════════════════════════════ */
 let _qmRevisionIdx = null;
 
+function salesQuoteToggleSelect(idx){
+  const r = requests.find(x => x.id === salesCurrentId);
+  if(!r || !r.quotes || !r.quotes[idx]) return;
+  r.quotes[idx].selectedForClient = !r.quotes[idx].selectedForClient;
+  sbSyncReq(salesCurrentId);
+  salesViewSetTab('quotes');
+}
+
 function salesQuoteApproveItem(idx){
   const r = requests.find(x => x.id === salesCurrentId);
   if(!r || !r.quotes || !r.quotes[idx]) return;
@@ -4112,18 +4183,14 @@ function salesQuoteRevisionConfirm(){
 function salesSubmitQuoteDecisions(){
   const r = requests.find(x => x.id === salesCurrentId);
   if(!r || !r.quotes || !r.quotes.length) return;
-  const approvedList = r.quotes.filter(q => q.status === 'approved');
+  const selectedList = r.quotes.filter(q => q.selectedForClient);
   const revisionList = r.quotes.filter(q => q.status === 'revision');
-  const pendingList  = r.quotes.filter(q => q.status === 'pending');
-  if(pendingList.length){
-    if(!confirm(a(`يوجد ${pendingList.length} عرض/عروض لم تُعطِ عليها قراراً. هل تريد المتابعة؟`,`${pendingList.length} quote(s) have no decision yet. Continue?`))) return;
+  if(!selectedList.length){
+    alert('Please select at least one quote to include in the client comparison table.'); return;
   }
-  if(!approvedList.length && !revisionList.length){
-    alert(a('يجب اعتماد عرض واحد على الأقل أو طلب تعديل','Approve or request revision on at least one quote')); return;
-  }
-  if(revisionList.length > 0 && approvedList.length === 0){
-    // كل العروض تحتاج تعديل → under_revision
-    addHistory(r, a('عروض مُرسلة للمندوب','Quotes Submitted'), a('قيد التعديل من المندوب','Under Revision by Sales'));
+  selectedList.forEach(q => { q.status = 'approved'; });
+  if(revisionList.length > 0 && selectedList.length === 0){
+    addHistory(r, 'Quotes Submitted', 'Under Revision by Sales');
     r.opsStatus = 'under_revision';
     if(!r.revisions) r.revisions = [];
     r.revisions.push({
@@ -4131,71 +4198,100 @@ function salesSubmitQuoteDecisions(){
       by: curUser?.name || '', at: new Date().toISOString().slice(0,10)
     });
     sbSyncReq(salesCurrentId);
-    if(r.handledBy) sendSystemNotification(r.handledBy, a('طلب تعديل على عروض الأسعار — الطلب: ','Quote revision requested — ref: ') + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
-    alert(a(`تم إرسال طلب التعديل للأوبريشن (${revisionList.length} عرض/عروض)`  , `Revision request sent to Ops (${revisionList.length} quote(s))`));
+    if(r.handledBy) sendSystemNotification(r.handledBy, 'Quote revision requested — ref: ' + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
+    alert(`Revision request sent to Ops (${revisionList.length} quote(s))`);
   } else {
-    // يوجد معتمدات → ready_to_send + نبلّغ بأي تعديلات أيضاً
-    addHistory(r, a('عروض مُرسلة للمندوب','Quotes Submitted'), a('جاهز للإرسال للعميل','Ready to Send to Client'));
+    addHistory(r, 'Quotes Submitted', 'Ready to Send to Client');
     r.opsStatus = 'ready_to_send';
     sbSyncReq(salesCurrentId);
-    sendSystemNotification(r.assignedTo, a('تم اعتماد عروض الأسعار — الطلب: ','Quotes approved — ref: ') + r.ref + a(' · جدول المقارنة جاهز',' · comparison table ready'), 'success');
-    if(r.handledBy && revisionList.length > 0) sendSystemNotification(r.handledBy, a('بعض العروض تحتاج تعديل — الطلب: ','Some quotes need revision — ref: ') + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
-    alert(a(`جاهز — ${approvedList.length} عرض/عروض معتمدة. جدول المقارنة متاح الآن.`, `Ready — ${approvedList.length} quote(s) approved. Comparison table is now available.`));
+    sendSystemNotification(r.assignedTo, 'Quotes selected — ref: ' + r.ref + ' · comparison table ready', 'success');
+    if(r.handledBy && revisionList.length > 0) sendSystemNotification(r.handledBy, 'Some quotes need revision — ref: ' + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
+    alert(`Done — ${selectedList.length} quote(s) selected for client. Comparison table is now available.`);
   }
   salesViewSetTab('quotes');
 }
 
 function salesComparisonSheet(r){
-  const approved = (r.quotes||[]).filter(q => q.status === 'approved');
-  if(!approved.length){
-    return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">${a('لا توجد عروض معتمدة لعرضها في جدول المقارنة','No approved quotes for comparison table')}</div>`;
+  const selected = (r.quotes||[]).filter(q => q.selectedForClient);
+  if(!selected.length){
+    return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">No quotes selected for comparison. Go back and check the quotes to include.</div>`;
   }
-  const clientName = salesClientName(r) || r.clientName || a('العميل','Client');
+  const clientName = salesClientName(r) || r.clientName || 'Client';
+  const clientEmail = r.clientEmail || '';
+  const winnerIdx = r.winnerQuoteId ? (r.quotes||[]).findIndex(q => q.id === r.winnerQuoteId) : -1;
+
+  const emailRows = selected.map((q,i)=>`${i+1}. ${q.insurer||'—'} | Quote No: ${q.quoteNo||'—'} | Valid Until: ${q.validUntil||'—'} | Total Premium: ${Number(q.premium||0).toLocaleString()} SAR`).join('%0A');
+  const emailSubject = encodeURIComponent(`Insurance Quotation Comparison — Ref: ${r.ref}`);
+  const emailBody = encodeURIComponent(`Dear ${clientName},%0A%0APlease find below the quotation comparison for your reference:%0A%0A${decodeURIComponent(emailRows)}%0A%0ABest regards`);
+
   return `
-  <div style="margin-bottom:16px;padding:12px 16px;background:linear-gradient(135deg,var(--blue) 0%,#1d4ed8 100%);border-radius:var(--r);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+  <div style="margin-bottom:14px;padding:12px 16px;background:linear-gradient(135deg,var(--blue) 0%,#1d4ed8 100%);border-radius:var(--r);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
     <div>
-      <div style="font-size:14px;font-weight:700;margin-bottom:2px">${a('جدول مقارنة عروض الأسعار','Quotation Comparison Table')}</div>
-      <div style="font-size:12px;opacity:.85">${a('خاص بـ:','For:')} ${clientName} · ${a('الطلب:','Ref:')} ${r.ref}</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:2px">Quotation Comparison Table</div>
+      <div style="font-size:12px;opacity:.85">For: ${clientName} · Ref: ${r.ref}</div>
     </div>
-    <span style="font-size:11.5px;background:rgba(255,255,255,.2);padding:4px 10px;border-radius:6px">${approved.length} ${a('عرض معتمد','approved quotes')}</span>
+    <span style="font-size:11.5px;background:rgba(255,255,255,.2);padding:4px 10px;border-radius:6px">${selected.length} quote(s) selected</span>
   </div>
   <div style="padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:var(--r);margin-bottom:14px;font-size:12px;color:#92400e;display:flex;align-items:center;gap:8px">
-    🔒 ${a('هذا الجدول للعرض الخارجي فقط — لا يحتوي على أي بيانات عمولات داخلية.','This table is for external use only — all internal commission data is excluded.')}
+    🔒 This table is for external use only — all internal commission data is excluded.
+  </div>
+  <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px">
+      <label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:5px">Client Email Address</label>
+      <input type="email" id="qm-client-email" class="finp" value="${clientEmail}" placeholder="client@example.com" style="width:100%;max-width:320px" oninput="qmSaveClientEmail(this.value)">
+    </div>
+    <a class="btn btn-o btn-sm" href="mailto:${clientEmail}?subject=${emailSubject}&body=${emailBody}" target="_blank" style="font-size:12.5px;text-decoration:none;margin-top:18px">
+      ✉ Send via Email
+    </a>
   </div>
   <div class="qm-compare-wrap">
     <table class="qm-compare-tbl">
       <thead>
         <tr>
           <th>#</th>
-          <th>${a('شركة التأمين','Insurance Company')}</th>
-          <th>${a('رقم العرض','Quote No.')}</th>
-          <th>${a('صالح حتى','Valid Until')}</th>
-          <th>${a('القسط الإجمالي (ر.س)','Total Premium (SAR)')}</th>
-          <th>${a('المستندات','Documents')}</th>
+          <th>Insurance Company</th>
+          <th>Quote No.</th>
+          <th>Valid Until</th>
+          <th>Total Premium (SAR)</th>
+          <th>Documents</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>
-        ${approved.map((q,i)=>`
-        <tr>
+        ${selected.map((q,i)=>{
+          const isWinner = r.winnerQuoteId && q.id === r.winnerQuoteId;
+          return `
+        <tr style="${isWinner?'background:#f0fdf4;':''}">
           <td style="font-weight:700;color:var(--text2)">${i+1}</td>
-          <td style="font-weight:700">${q.insurer||'—'}</td>
+          <td style="font-weight:700">${q.insurer||'—'}${isWinner?` <span style="font-size:10px;padding:2px 6px;background:#d1fae5;color:#065f46;border-radius:5px;font-weight:700">✓ Selected</span>`:''}</td>
           <td dir="ltr" style="font-family:'Inter',sans-serif">${q.quoteNo||'—'}</td>
           <td dir="ltr" style="font-family:'Inter',sans-serif">${q.validUntil||'—'}</td>
           <td dir="ltr" style="font-weight:700;color:var(--blue);font-size:14px;font-family:'Inter',sans-serif">${Number(q.premium||0).toLocaleString()}</td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              ${q.attachPdf?`<span style="font-size:11.5px;color:var(--blue)">📄 ${q.attachPdf}</span>`:''}
-              ${q.attachBenefits?`<span style="font-size:11.5px;color:var(--text2)">📋 ${q.attachBenefits}</span>`:''}
-              ${q.attachNetwork?`<span style="font-size:11.5px;color:var(--text2)">🏥 ${q.attachNetwork}</span>`:''}
+            <div style="display:flex;flex-direction:column;gap:4px">
+              ${q.attachPdf?qmAttachBtn(q.attachPdf):''}
+              ${q.attachBenefits?qmAttachBtn(q.attachBenefits):''}
+              ${q.attachNetwork?qmAttachBtn(q.attachNetwork):''}
             </div>
           </td>
-        </tr>`).join('')}
+          <td>
+            ${isWinner
+              ? `<span style="font-size:11.5px;font-weight:700;color:#059669">✓ Approved</span>`
+              : `<button class="btn btn-p btn-sm" onclick="salesApproveWinnerQuote('${q.id}')" style="font-size:11.5px;white-space:nowrap">Approve & Proceed →</button>`
+            }
+          </td>
+        </tr>`;}).join('')}
       </tbody>
     </table>
   </div>
-  <div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
-    <button class="btn btn-p" onclick="salesApproveQuote()">✓ ${a('اعتماد ونقل للتنفيذ','Approve & Move to Execution')}</button>
-    <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ ${a('رفض - خسارة','Lost')}</button>
+  <div style="margin-top:14px;padding:12px 14px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="font-size:12.5px;color:var(--text2)">
+      ${r.winnerQuoteId ? `<b style="color:#059669">✓ Quote approved — ready to move to execution.</b>` : 'Click "Approve & Proceed" on the winning quote to start the execution phase.'}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${r.winnerQuoteId ? `<button class="btn btn-p" onclick="salesApproveQuote()">✓ Move to Execution</button>` : ''}
+      <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ Lost</button>
+    </div>
   </div>`;
 }
 
@@ -5058,10 +5154,10 @@ function opsQuotesTab(r){
               ${q.validUntil?`<div style="font-size:12.5px;color:var(--text2)">${a('صالح حتى:','Valid Until:')} <b dir="ltr">${q.validUntil}</b></div>`:''}
               <div style="font-size:13px;color:var(--text2)">${a('القسط الإجمالي:','Total Premium:')} <b style="color:var(--blue);font-size:14px" dir="ltr">${Number(q.premium||0).toLocaleString()} ${a('ر.س','SAR')}</b></div>
             </div>
-            <div style="margin-top:8px;display:flex;flex-direction:column;gap:3px">
-              ${q.attachPdf?`<span style="font-size:11.5px;color:var(--blue)">📄 ${q.attachPdf}</span>`:''}
-              ${q.attachBenefits?`<span style="font-size:11.5px;color:var(--text2)">📋 ${q.attachBenefits}</span>`:''}
-              ${q.attachNetwork?`<span style="font-size:11.5px;color:var(--text2)">🏥 ${q.attachNetwork}</span>`:''}
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">
+              ${q.attachPdf?qmAttachBtn(q.attachPdf):''}
+              ${q.attachBenefits?qmAttachBtn(q.attachBenefits):''}
+              ${q.attachNetwork?qmAttachBtn(q.attachNetwork):''}
             </div>
           </div>
           <div class="qm-int">
@@ -5136,6 +5232,14 @@ function opsQuotesTab(r){
   return html;
 }
 
+function qmAttachBtn(name){
+  if(!name) return '';
+  const isUrl = name.startsWith('http://') || name.startsWith('https://');
+  const href  = isUrl ? name : '#';
+  const onclick = isUrl ? '' : `onclick="event.preventDefault();alert('${a('الملف:','File:')} ${name.replace(/'/g,"\\'")}');"`;
+  const icon = name.toLowerCase().includes('pdf') ? '📄' : name.toLowerCase().includes('benefit') || name.toLowerCase().includes('منافع') ? '📋' : name.toLowerCase().includes('network') || name.toLowerCase().includes('شبكة') ? '🏥' : '📎';
+  return `<a class="qm-attach-btn" href="${href}" target="_blank" ${onclick} title="${name}">${icon} ${name.length>38?name.slice(0,36)+'…':name} ↗</a>`;
+}
 function oqCalcComm(){
   const prem = parseFloat(document.getElementById('oq-premium')?.value || 0);
   const pct  = parseFloat(document.getElementById('oq-commpct')?.value || 0);
@@ -5264,6 +5368,16 @@ function opsStartExecution(){
   addHistory(r, a('معتمد','Approved'), a('قيد التنفيذ','Executing'));
   r.opsStatus = 'executing';
   r.phase = 'execution';
+  if(!r.execution) r.execution = {};
+  const winnerQuote = r.winnerQuoteId
+    ? (r.quotes||[]).find(q => String(q.id) === String(r.winnerQuoteId))
+    : (r.quotes||[]).find(q => q.selectedForClient && q.status === 'approved') || (r.quotes||[]).find(q => q.status === 'approved');
+  if(winnerQuote){
+    r.execution.insurer        = r.execution.insurer        || winnerQuote.insurer     || '';
+    r.execution.finalPremium   = r.execution.finalPremium   || winnerQuote.premium     || '';
+    r.execution.commissionPct  = r.execution.commissionPct  || winnerQuote.commissionPct || '';
+    r.execution.commissionAmt  = r.execution.commissionAmt  || winnerQuote.commissionAmt || '';
+  }
   sbSyncReq(opsCurrentId);
   sendSystemNotification(r.assignedTo, a('انتقل طلبك لمرحلة التنفيذ — الطلب: ','Your request moved to execution phase — ref: ') + r.ref, 'info');
   opsTab = 'execution';
