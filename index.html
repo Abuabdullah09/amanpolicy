@@ -205,6 +205,13 @@ tbody tr:hover{background:var(--hover);}
 #jnl-lines-table th{position:relative;}
 .col-resizer{position:absolute;top:0;inset-inline-end:0;width:5px;height:100%;cursor:col-resize;user-select:none;z-index:1;}
 .col-resizer:hover,.col-resizer.dragging{background:var(--blue);opacity:.5;}
+.cc-th.col-drag-over{box-shadow:inset 3px 0 0 var(--blue);}
+.cc-th[draggable="true"]{cursor:grab;user-select:none;}
+.cc-th[draggable="true"]:active{cursor:grabbing;}
+.cc-th.col-dragging{opacity:.45;background:var(--bg);}
+.col-sort-btn{border:none;background:transparent;padding:0 2px;cursor:pointer;color:var(--text3);font-size:10px;line-height:1;vertical-align:middle;transition:color .12s;}
+.col-sort-btn:hover,.col-sort-btn.active{color:var(--blue);}
+.col-sort-btn.active{color:var(--blue);font-weight:700;}
 tbody td{padding:9px 13px;font-size:12px;color:var(--text);}
 
 /* ── شارات ── */
@@ -2705,6 +2712,7 @@ const SALES_TABS = [
 let salesView = 'list';   // list | cards
 // الأعمدة الظاهرة في القائمة (المستخدم يتحكم من الفلتر)
 let salesCols = {client:true, size:false, type:true, classification:false, tier:false, kind:false, status:true, date:true, opsEmp:true};
+let salesSortDir = 'desc';
 let salesEditTab = 'notes';   // notes | docs (في صفحة الإدخال)
 let salesTmpNotes = null;
 let salesTmpInsurers = [];   // شركات التأمين المختارة (متعدد)
@@ -2915,7 +2923,7 @@ document.addEventListener('click', e => {
 
 function salesFiltered(){
   const q = (document.getElementById('sl-q')?.value || '').toLowerCase().trim();
-  return requests.filter(r => {
+  const list = requests.filter(r => {
     if(isSalesEmp() && r.assignedTo !== curUser.user) return false;
     if(salesFilter !== 'all' && r.status !== salesFilter) return false;
     if(salesTypeFilter !== 'all' && r.insType !== salesTypeFilter) return false;
@@ -2928,7 +2936,13 @@ function salesFiltered(){
     }
     return true;
   });
+  list.sort((a,b) => {
+    const ai = parseInt(a.id)||0, bi = parseInt(b.id)||0;
+    return salesSortDir === 'desc' ? bi - ai : ai - bi;
+  });
+  return list;
 }
+function salesToggleSort(){ salesSortDir = salesSortDir==='desc'?'asc':'desc'; renderSalesList(); }
 
 function renderSalesList(){
   const area = document.getElementById('sales-area');
@@ -2945,11 +2959,16 @@ function renderSalesList(){
     <div class="tw">
       <table class="cc-table">
         <thead><tr style="background:var(--bg);border-bottom:2px solid var(--border)">
-          <th class="cc-th" style="position:relative">
-            <span>${a('رقم الطلب','Ref')}</span>
+          <th class="cc-th" style="position:relative" draggable="true" data-col="ref">
+            <div style="display:flex;align-items:center;gap:5px">
+              <span>${a('رقم الطلب','Ref')}</span>
+              <button class="col-sort-btn active" onclick="event.stopPropagation();salesToggleSort()" title="${a('ترتيب','Sort')}">
+                ${salesSortDir==='desc'?'↓':'↑'}
+              </button>
+            </div>
             <span class="cc-resize"></span>
           </th>
-          ${C.client?`<th class="cc-th" style="position:relative">
+          ${C.client?`<th class="cc-th" style="position:relative" draggable="true" data-col="client">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('العميل','Client')}</span>
               <button onclick="slToggleClientDD(event)" style="border:none;background:${salesClientFilter?'var(--blue)':'transparent'};color:${salesClientFilter?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -2964,8 +2983,8 @@ function renderSalesList(){
             </div>
             <span class="cc-resize"></span>
           </th>`:''}
-          ${C.size?`<th class="cc-th" style="position:relative"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.type?`<th class="cc-th" style="position:relative">
+          ${C.size?`<th class="cc-th" style="position:relative" draggable="true" data-col="size"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.type?`<th class="cc-th" style="position:relative" draggable="true" data-col="type">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('نوع التأمين','Type')}</span>
               <button onclick="slToggleTypeDD(event)" style="border:none;background:${salesTypeFilter!=='all'?'var(--blue)':'transparent'};color:${salesTypeFilter!=='all'?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -2982,10 +3001,10 @@ function renderSalesList(){
             </div>
             <span class="cc-resize"></span>
           </th>`:''}
-          ${C.classification?`<th class="cc-th" style="position:relative"><span>${a('التصنيف','Classification')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.tier?`<th class="cc-th" style="position:relative"><span>${a('خاص/عادي','Tier')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.kind?`<th class="cc-th" style="position:relative"><span>${a('نوع الطلب','Kind')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.status?`<th class="cc-th" style="position:relative">
+          ${C.classification?`<th class="cc-th" style="position:relative" draggable="true" data-col="classification"><span>${a('التصنيف','Classification')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.tier?`<th class="cc-th" style="position:relative" draggable="true" data-col="tier"><span>${a('خاص/عادي','Tier')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.kind?`<th class="cc-th" style="position:relative" draggable="true" data-col="kind"><span>${a('نوع الطلب','Kind')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.status?`<th class="cc-th" style="position:relative" draggable="true" data-col="status">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('الحالة','Status')}</span>
               <button onclick="slToggleStatusDD(event)" style="border:none;background:${salesFilter!=='all'?'var(--blue)':'transparent'};color:${salesFilter!=='all'?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -3000,9 +3019,10 @@ function renderSalesList(){
                 <input type="radio" name="sl-stat-r" value="${s.id}" ${salesFilter===s.id?'checked':''} onchange="slSetStatusFilter('${s.id}')" style="accent-color:var(--blue)"/> ${lang==='ar'?s.ar:s.en}
               </label>`).join('')}
             </div>
+            <span class="cc-resize"></span>
           </th>`:''}
-          ${C.opsEmp?`<th class="cc-th" style="position:relative"><span>${a('موظف الأوبريشن','Ops Officer')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.date?`<th class="cc-th" style="position:relative">
+          ${C.opsEmp?`<th class="cc-th" style="position:relative" draggable="true" data-col="opsEmp"><span>${a('موظف الأوبريشن','Ops Officer')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.date?`<th class="cc-th" style="position:relative" draggable="true" data-col="date">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('التاريخ','Date')}</span>
               <button onclick="slToggleDateDD(event)" style="border:none;background:${(salesDateFrom||salesDateTo)?'var(--blue)':'transparent'};color:${(salesDateFrom||salesDateTo)?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -3016,6 +3036,7 @@ function renderSalesList(){
               <input type="date" value="${salesDateTo}" oninput="salesDateTo=this.value;renderSalesTbody()" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px;outline:none;font-family:inherit;color:var(--text);background:var(--white)"/>
               ${(salesDateFrom||salesDateTo)?`<div onclick="salesDateFrom='';salesDateTo='';slCloseAllDDs();renderSalesList()" style="margin-top:8px;text-align:center;font-size:11px;color:var(--blue);cursor:pointer;padding:3px">${a('مسح','Clear')}</div>`:''}
             </div>
+            <span class="cc-resize"></span>
           </th>`:''}
           <th style="width:36px;position:relative;text-align:center;padding:0">
             <button onclick="slToggleColPickerDD(event)" title="${a('الأعمدة','Columns')}"
@@ -3097,6 +3118,80 @@ function salesSetView(v){
   const tb = document.getElementById('tbActions');
   if(tb && salesMode !== 'view' && salesMode !== 'edit') tb.innerHTML = salesTopbarActions();
 }
+function applySavedColOrder(table, savedOrder){
+  const theadRow = table.querySelector('thead tr');
+  if(!theadRow) return;
+  const allThs = [...theadRow.querySelectorAll('th')];
+  if(allThs.length < 2) return;
+  const sorted = [...allThs].sort((a, b) => {
+    const ka = a.dataset.col || '__fixed__';
+    const kb = b.dataset.col || '__fixed__';
+    let ai = savedOrder.indexOf(ka); if(ai < 0) ai = 9999 + allThs.indexOf(a);
+    let bi = savedOrder.indexOf(kb); if(bi < 0) bi = 9999 + allThs.indexOf(b);
+    return ai - bi;
+  });
+  const permutation = sorted.map(th => allThs.indexOf(th));
+  [...table.querySelectorAll('thead tr, tbody tr')].forEach(row => {
+    const cells = [...row.querySelectorAll('th,td')];
+    if(cells.length !== allThs.length) return;
+    const frag = document.createDocumentFragment();
+    permutation.forEach(i => frag.appendChild(cells[i]));
+    row.appendChild(frag);
+  });
+}
+function initColDrag(areaSelector, storageKey){
+  const area = document.querySelector(areaSelector);
+  if(!area) return;
+  const table = area.querySelector('.cc-table');
+  if(!table) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if(Array.isArray(saved) && saved.length > 0) applySavedColOrder(table, saved);
+  } catch(e){}
+  let dragSrc = null;
+  table.querySelectorAll('thead tr th[draggable="true"]').forEach(th => {
+    th.addEventListener('dragstart', e => {
+      dragSrc = th;
+      th.classList.add('col-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', th.dataset.col || '');
+    });
+    th.addEventListener('dragend', () => {
+      th.classList.remove('col-dragging');
+      table.querySelectorAll('.col-drag-over').forEach(el => el.classList.remove('col-drag-over'));
+      dragSrc = null;
+    });
+    th.addEventListener('dragover', e => {
+      if(!dragSrc || dragSrc === th) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      table.querySelectorAll('.col-drag-over').forEach(el => el.classList.remove('col-drag-over'));
+      th.classList.add('col-drag-over');
+    });
+    th.addEventListener('dragleave', e => {
+      if(!e.relatedTarget || !th.contains(e.relatedTarget)) th.classList.remove('col-drag-over');
+    });
+    th.addEventListener('drop', e => {
+      e.preventDefault();
+      if(!dragSrc || dragSrc === th) return;
+      th.classList.remove('col-drag-over');
+      const theadRow = table.querySelector('thead tr');
+      const allThs = [...theadRow.querySelectorAll('th')];
+      const srcIdx = allThs.indexOf(dragSrc);
+      const tgtIdx = allThs.indexOf(th);
+      if(srcIdx < 0 || tgtIdx < 0 || srcIdx === tgtIdx) return;
+      [...table.querySelectorAll('thead tr, tbody tr')].forEach(row => {
+        const cells = [...row.querySelectorAll('th,td')];
+        if(srcIdx >= cells.length || tgtIdx >= cells.length) return;
+        const srcCell = cells[srcIdx];
+        const tgtCell = cells[tgtIdx];
+        if(srcIdx < tgtIdx){ tgtCell.after(srcCell); } else { tgtCell.before(srcCell); }
+      });
+      const newOrder = [...table.querySelectorAll('thead tr th')].map(t => t.dataset.col || '__fixed__');
+      try{ localStorage.setItem(storageKey, JSON.stringify(newOrder)); }catch(e){}
+    });
+  });
+}
 function salesInitResize(){
   document.querySelectorAll('#sales-area .cc-table .cc-resize').forEach(handle => {
     handle.addEventListener('mousedown', e => {
@@ -3114,6 +3209,7 @@ function salesInitResize(){
       document.addEventListener('mouseup', up);
     });
   });
+  initColDrag('#sales-area', 'erp-sales-col-order');
 }
 function renderSalesCards(list){
   return `<div class="cc-grid">` + list.map(r => {
@@ -4446,6 +4542,7 @@ let opsMode = 'list', opsCurrentId = null, opsTab = 'info', opsFilter = 'all', o
 let opsShowUnassigned = false;
 function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
 let opsCols = {client:true,salesRep:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:false,category:false};
+let opsSortDir = 'desc';
 
 function pgOps(){
   if(opsMode === 'view') return opsViewSheet();
@@ -4602,7 +4699,7 @@ document.addEventListener('click', e => {
 
 function opsFiltered(){
   const q = (document.getElementById('op-q')?.value || '').toLowerCase().trim();
-  return opsRequests().filter(r => {
+  const list = opsRequests().filter(r => {
     if(opsFilter === 'unassigned') { if(r.handledBy) return false; }
     else { const os = r.opsStatus || 'inbox'; if(opsFilter !== 'all' && os !== opsFilter) return false; }
     if(opsTypeFilter !== 'all' && r.insType !== opsTypeFilter) return false;
@@ -4612,7 +4709,13 @@ function opsFiltered(){
     }
     return true;
   });
+  list.sort((a,b) => {
+    const ai = parseInt(a.id)||0, bi = parseInt(b.id)||0;
+    return opsSortDir === 'desc' ? bi - ai : ai - bi;
+  });
+  return list;
 }
+function opsToggleSort(){ opsSortDir = opsSortDir==='desc'?'asc':'desc'; renderOpsList(); }
 
 function renderOpsList(){
   const area = document.getElementById('ops-area');
@@ -4633,11 +4736,19 @@ function renderOpsTable(list){
     <div class="tw">
       <table class="cc-table">
         <thead><tr style="background:var(--bg);border-bottom:2px solid var(--border)">
-          <th class="cc-th" style="position:relative"><span>${a('رقم الطلب','Ref')}</span><span class="cc-resize"></span></th>
-          ${C.client?`<th class="cc-th" style="position:relative"><span>${a('العميل','Client')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.salesRep?`<th class="cc-th" style="position:relative"><span>${a('المندوب','Sales Rep')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.size?`<th class="cc-th" style="position:relative"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.type?`<th class="cc-th" style="position:relative">
+          <th class="cc-th" style="position:relative" draggable="true" data-col="ref">
+            <div style="display:flex;align-items:center;gap:5px">
+              <span>${a('رقم الطلب','Ref')}</span>
+              <button class="col-sort-btn active" onclick="event.stopPropagation();opsToggleSort()" title="${a('ترتيب','Sort')}">
+                ${opsSortDir==='desc'?'↓':'↑'}
+              </button>
+            </div>
+            <span class="cc-resize"></span>
+          </th>
+          ${C.client?`<th class="cc-th" style="position:relative" draggable="true" data-col="client"><span>${a('العميل','Client')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.salesRep?`<th class="cc-th" style="position:relative" draggable="true" data-col="salesRep"><span>${a('المندوب','Sales Rep')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.size?`<th class="cc-th" style="position:relative" draggable="true" data-col="size"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.type?`<th class="cc-th" style="position:relative" draggable="true" data-col="type">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('نوع التأمين','Type')}</span>
               <button onclick="opToggleTypeDD(event)" style="border:none;background:${opsTypeFilter!=='all'?'var(--blue)':'transparent'};color:${opsTypeFilter!=='all'?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -4654,10 +4765,10 @@ function renderOpsTable(list){
             </div>
             <span class="cc-resize"></span>
           </th>`:''}
-          ${C.classification?`<th class="cc-th" style="position:relative"><span>${a('التصنيف','Classification')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.tier?`<th class="cc-th" style="position:relative"><span>${a('خاص/عادي','Tier')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.quotes?`<th class="cc-th" style="position:relative"><span>${a('عروض الأسعار','Quotes')}</span><span class="cc-resize"></span></th>`:''}
-          ${C.status?`<th class="cc-th" style="position:relative">
+          ${C.classification?`<th class="cc-th" style="position:relative" draggable="true" data-col="classification"><span>${a('التصنيف','Classification')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.tier?`<th class="cc-th" style="position:relative" draggable="true" data-col="tier"><span>${a('خاص/عادي','Tier')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.quotes?`<th class="cc-th" style="position:relative" draggable="true" data-col="quotes"><span>${a('عروض الأسعار','Quotes')}</span><span class="cc-resize"></span></th>`:''}
+          ${C.status?`<th class="cc-th" style="position:relative" draggable="true" data-col="status">
             <div style="display:flex;align-items:center;gap:4px">
               <span>${a('حالة المعالجة','Status')}</span>
               <button onclick="opToggleStatusDD(event)" style="border:none;background:${opsFilter!=='all'?'var(--blue)':'transparent'};color:${opsFilter!=='all'?'#fff':'var(--text3)'};cursor:pointer;padding:2px 5px;border-radius:4px;display:flex;align-items:center;flex-shrink:0">
@@ -4672,6 +4783,7 @@ function renderOpsTable(list){
                 <input type="radio" name="op-stat-r" value="${s.id}" ${opsFilter===s.id?'checked':''} onchange="opSetStatusFilter('${s.id}')" style="accent-color:var(--blue)"/> ${lang==='ar'?s.ar:s.en}
               </label>`).join('')}
             </div>
+            <span class="cc-resize"></span>
           </th>`:''}
           ${opsUserCanAssign() ? `<th class="cc-th" style="min-width:130px"><span>${a('إسناد','Assign')}</span></th>` : ''}
           <th style="width:36px;position:relative;text-align:center;padding:0">
@@ -4777,6 +4889,7 @@ function opsInitResize(){
       document.addEventListener('mouseup', up);
     });
   });
+  initColDrag('#ops-area', 'erp-ops-col-order');
 }
 
 /* ════════════════ التنقل ════════════════ */
