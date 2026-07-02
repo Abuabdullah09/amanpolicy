@@ -3335,7 +3335,6 @@ function salesViewSheet(){
         <button class="btn btn-p btn-sm" onclick="salesApproveQuote()">✓ ${a('اعتماد ونقل للتنفيذ','Approve & Execute')}</button>
         <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ ${a('رفض - خسارة','Lost')}</button>
       ` : ''}
-      ${salesUserCanEdit(r) ? `<button class="btn btn-danger btn-sm" onclick="salesDelete()">${t('del')}</button>` : ''}
       ${r.status !== 'lost' && r.opsStatus !== 'done' && (curUser?.role==='superadmin'||isSalesMgr()||isSalesEmp()) ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5" onclick="showMarkAsLostModal('${r.id}','sales')">✕ ${a('تسجيل كخسارة','Mark as Lost')}</button>` : ''}
       ${r.status === 'lost' ? `<span style="padding:5px 12px;border-radius:99px;font-size:12px;font-weight:700;background:#fee2e2;color:#dc2626">✕ ${a('مُسجَّل كخسارة','Marked Lost')}</span>` : ''}
     </div>
@@ -3433,17 +3432,20 @@ function salesTabContent(r, c){
     const revisionCount = quotes.filter(q => q.status === 'revision').length;
 
     let html = `
-    <div style="margin-bottom:16px;padding:12px 16px;background:var(--bg);border-radius:var(--r);font-size:12.5px;color:var(--text2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="margin-bottom:12px;padding:12px 16px;background:var(--bg);border-radius:var(--r);font-size:12.5px;color:var(--text2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
       <div>
-        <b style="color:var(--text)">Quotes Review Panel</b>
-        ${canDecide ? `<span style="color:var(--blue);font-weight:600;margin-left:8px">· Check the quotes to include in the client comparison table</span>` : ''}
+        <b style="color:var(--text)">${a('المرحلة ١ — اختيار العروض للعميل','Phase 1 — Select Quotes for Client')}</b>
+        ${canDecide ? `<div style="font-size:12px;color:var(--text3);margin-top:2px">${a('حدد عرضاً أو أكثر لإدراجه في جدول المقارنة ثم اضغط "إرسال للمقارنة"','Check one or more quotes to include in the client comparison table')}</div>` : ''}
       </div>
       ${canDecide ? `<div style="display:flex;gap:12px;font-size:12px">
-        <span>Selected for Client: <b style="color:#059669">${selectedCount}</b></span>
-        <span>Revision Requested: <b style="color:#f59e0b">${revisionCount}</b></span>
-        <span>Total: <b>${quotes.length}</b></span>
+        <span>${a('مختار:','Selected:')} <b style="color:#059669">${selectedCount}</b></span>
+        <span>${a('مراجعة:','Revision:')} <b style="color:#f59e0b">${revisionCount}</b></span>
+        <span>${a('الكل:','Total:')} <b>${quotes.length}</b></span>
       </div>` : ''}
-    </div>`;
+    </div>
+    ${canDecide ? `<div style="margin-bottom:12px;padding:9px 14px;background:#eff6ff;border:1px solid #93c5fd;border-radius:var(--r);font-size:12px;color:#1e40af">
+      📋 ${a('المرحلة ١: اختر عروضاً متعددة للمقارنة ثم أرسلها. المرحلة ٢: بعد موافقة العميل، اعتمد العرض الفائز الواحد من جدول المقارنة.','Phase 1: Select multiple quotes for comparison then send. Phase 2: After client approves, choose the single winner from the comparison table.')}
+    </div>` : ''}`;
 
     html += quotes.map((q, i) => {
       const isSel = !!q.selectedForClient;
@@ -3501,13 +3503,15 @@ function salesTabContent(r, c){
       const hasSelected = quotes.some(q => q.selectedForClient);
       html += `
       <div style="margin-top:18px;padding:14px 16px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border)">
-        ${!hasSelected ? `<div style="font-size:12.5px;color:#b8740f;font-weight:600;margin-bottom:10px">⚠ Select at least one quote to include in the client comparison table.</div>` : ''}
+        ${!hasSelected ? `<div style="font-size:12.5px;color:#b8740f;font-weight:600;margin-bottom:10px">⚠ ${a('اختر عرضاً أو أكثر لإدراجه في جدول المقارنة','Select at least one quote to include in the comparison table')}</div>` : ''}
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
           <div style="font-size:12.5px;color:var(--text2)">
-            ${hasSelected ? `<b style="color:#059669">${selectedCount} quote(s)</b> selected for comparison.${revisionCount?` <b style="color:#f59e0b">${revisionCount}</b> sent back to Ops for revision.`:''}` : 'Check the quotes you want to include, then submit your decisions.'}
+            ${hasSelected
+              ? `<b style="color:#059669">${selectedCount} ${a('عرض مختار للمقارنة','quote(s) selected for comparison')}</b>${revisionCount?` · <b style="color:#f59e0b">${revisionCount} ${a('للمراجعة','for revision')}</b>`:''}`
+              : a('حدد العروض التي تريد إرسالها للعميل للمقارنة.','Check the quotes you want to send to the client for comparison.')}
           </div>
           <button class="btn btn-p" onclick="salesSubmitQuoteDecisions()" ${!hasSelected?'disabled style="opacity:.5;cursor:not-allowed"':''}>
-            Submit Decisions ✓
+            ✓ ${a('إرسال العروض المختارة للعميل','Send Selected Quotes to Client')}
           </button>
         </div>
       </div>`;
@@ -4067,7 +4071,9 @@ function salesApproveWinnerQuote(quoteId){
   if(!q){ alert('Quote not found.'); return; }
   if(!confirm(`Approve "${q.insurer||'this quote'}" (${Number(q.premium||0).toLocaleString()} SAR) and proceed to execution?`)) return;
   r.winnerQuoteId = quoteId;
-  r.quotes.forEach(x => { x.status = (String(x.id) === String(quoteId)) ? 'approved' : (x.selectedForClient && String(x.id) !== String(quoteId) ? x.status : x.status); });
+  r.quotes.forEach(x => {
+    if(String(x.id) === String(quoteId)) x.status = 'approved';
+  });
   sbSyncReq(salesCurrentId);
   salesViewSetTab('quotes');
 }
@@ -4349,9 +4355,12 @@ function salesComparisonSheet(r){
     </div>
     <span style="font-size:11.5px;background:rgba(255,255,255,.2);padding:4px 10px;border-radius:6px">${selected.length} quote(s) selected</span>
   </div>
-  <div style="padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:var(--r);margin-bottom:14px;font-size:12px;color:#92400e;display:flex;align-items:center;gap:8px">
-    🔒 This table is for external use only — all internal commission data is excluded.
+  <div style="padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:var(--r);margin-bottom:8px;font-size:12px;color:#92400e;display:flex;align-items:center;gap:8px">
+    🔒 ${a('الجدول للمشاركة الخارجية فقط — بيانات العمولة مخفية','External use only — commission data excluded')}
   </div>
+  ${!r.winnerQuoteId ? `<div style="padding:10px 14px;background:#eff6ff;border:1px solid #93c5fd;border-radius:var(--r);margin-bottom:14px;font-size:12px;color:#1e40af;display:flex;align-items:center;gap:8px">
+    📋 ${a('بعد موافقة العميل على عرض واحد، اضغط "اعتماد الفائز وإرسال للإصدار" بجانب العرض الذي اختاره — هذا يقفل الطلب ويرسله للأوبريشن.','After the client approves, click "Approve Winner & Issue" on the chosen quote — this locks the request and sends it to Operations.')}
+  </div>` : ''}
   <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <div style="flex:1;min-width:200px">
       <label style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:5px">Client Email Address</label>
@@ -4391,10 +4400,21 @@ function salesComparisonSheet(r){
               ${q.attachNetwork?qmAttachBtn(q.attachNetwork):''}
             </div>
           </td>
-          <td>
+          <td style="min-width:170px">
             ${isWinner
-              ? `<span style="font-size:11.5px;font-weight:700;color:#059669">✓ Approved</span>`
-              : `<button class="btn btn-p btn-sm" onclick="salesApproveWinnerQuote('${q.id}')" style="font-size:11.5px;white-space:nowrap">Approve & Proceed →</button>`
+              ? `<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+                   <span style="font-size:11.5px;font-weight:800;color:#059669;background:#dcfce7;padding:4px 10px;border-radius:6px">🏆 ${a('العرض الفائز','Winner')}</span>
+                   <button class="btn btn-p btn-sm" onclick="salesApproveQuote()" style="font-size:11.5px;background:#059669;border-color:#059669;white-space:nowrap">
+                     ✓ ${a('نقل للتنفيذ','Move to Execution')}
+                   </button>
+                 </div>`
+              : `<button onclick="salesApproveWinnerQuote('${q.id}')"
+                   style="display:block;width:100%;padding:7px 12px;border:1.5px solid #2563eb;background:#eff6ff;color:#1e40af;border-radius:8px;cursor:pointer;font-size:11.5px;font-weight:700;font-family:var(--font);text-align:center;white-space:nowrap;transition:background .13s"
+                   onmouseover="this.style.background='#2563eb';this.style.color='#fff'"
+                   onmouseout="this.style.background='#eff6ff';this.style.color='#1e40af'"
+                   title="${a('اضغط إذا وافق العميل على هذا العرض تحديداً','Press if the client approved this specific quote')}">
+                   🏆 ${a('اعتماد الفائز وإرسال للإصدار','Approve Winner & Issue')}
+                 </button>`
             }
           </td>
         </tr>`;}).join('')}
@@ -4403,12 +4423,12 @@ function salesComparisonSheet(r){
   </div>
   <div style="margin-top:14px;padding:12px 14px;background:var(--bg);border-radius:var(--r);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div style="font-size:12.5px;color:var(--text2)">
-      ${r.winnerQuoteId ? `<b style="color:#059669">✓ Quote approved — ready to move to execution.</b>` : 'Click "Approve & Proceed" on the winning quote to start the execution phase.'}
+      ${r.winnerQuoteId
+        ? `<b style="color:#059669">🏆 ${a('تم اختيار العرض الفائز — اضغط "نقل للتنفيذ" في صف العرض للمتابعة.','Winner selected — click "Move to Execution" in the winner row to proceed.')}</b>`
+        : `${a('بعد موافقة العميل على عرض، اضغط زر "اعتماد الفائز وإرسال للإصدار" بجانبه.','After client approves a quote, click "Approve Winner & Issue" beside it.')}`
+      }
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      ${r.winnerQuoteId ? `<button class="btn btn-p" onclick="salesApproveQuote()">✓ Move to Execution</button>` : ''}
-      <button class="btn btn-danger btn-sm" onclick="salesDecide_Lost()">✕ Lost</button>
-    </div>
+    <button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1.5px solid #fca5a5" onclick="salesDecide_Lost()">✕ ${a('تسجيل كخسارة','Mark as Lost')}</button>
   </div>`;
 }
 
@@ -5153,11 +5173,25 @@ function opsPolicyDetailPage(){
       </div>`;
     })() : ''}
 
-    <!-- جدول الدفعات -->
+    <!-- جدول الدفعات + إدارة خطة الدفع -->
     <div style="margin-bottom:18px">
-      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">${a('جدول الدفعات','Payment Schedule')}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">${a('خطة الدفع والتحصيل','Payment & Collection Schedule')}</div>
+        ${isOpsUser() || !isFinUser() ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <select id="pol-paymethod" style="height:32px;border:1.5px solid var(--border);border-radius:8px;padding:0 10px;font-family:var(--font);font-size:12px;background:var(--white);color:var(--text)" onchange="opsPolicySavePayMethod('${r.id}',this.value)">
+            <option value="" ${!ex.paymentMethod?'selected':''}>${a('— طريقة الدفع —','— Payment Method —')}</option>
+            <option value="full"      ${ex.paymentMethod==='full'     ?'selected':''}>${a('دفعة كاملة','Full Payment')}</option>
+            <option value="quarterly" ${ex.paymentMethod==='quarterly'?'selected':''}>${a('ربع سنوية (4 دفعات)','Quarterly (4 installments)')}</option>
+            <option value="semi"      ${ex.paymentMethod==='semi'     ?'selected':''}>${a('نصف سنوية (دفعتان)','Semi-Annual (2 installments)')}</option>
+          </select>
+          <button class="btn btn-p btn-sm" onclick="opsPolicyAutoGen('${r.id}')" style="height:32px;white-space:nowrap">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-inline-end:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            ${a('توليد جدول التحصيل','Auto Generate Schedule')}
+          </button>
+        </div>` : ''}
+      </div>
       ${inst.length===0
-        ? `<div style="padding:18px;text-align:center;color:var(--text3);font-size:12.5px;border:1.5px dashed var(--border);border-radius:var(--r)">${a('لا توجد دفعات','No installments')}</div>`
+        ? `<div style="padding:18px;text-align:center;color:var(--text3);font-size:12.5px;border:1.5px dashed var(--border);border-radius:var(--r)">${a('لا توجد دفعات — اختر طريقة الدفع ثم اضغط "توليد جدول التحصيل"','No installments — select payment method then click Auto Generate')}</div>`
         : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           <div style="padding:8px 14px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac;font-size:12px;color:#15803d;font-weight:700">${a('محصَّل','Collected')} <span dir="ltr">${fmtMoney(paidAmt)}</span></div>
           <div style="padding:8px 14px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d;font-size:12px;color:#b45309;font-weight:700">${a('معلّق','Pending')} <span dir="ltr">${fmtMoney(totalAmt-paidAmt)}</span></div>
@@ -5325,7 +5359,6 @@ function opsViewSheet(){
       ${['executing','issued','done'].includes(r.opsStatus) ? `<button class="sheet-tab ${opsTab==='execution'?'active':''}" data-otab="execution" onclick="opsSetTab('execution')">${a('بيانات الوثيقة','Policy')}</button>` : ''}
       <button class="sheet-tab ${opsTab==='client'?'active':''}" data-otab="client" onclick="opsSetTab('client')">${a('العميل','Client')}</button>
       <button class="sheet-tab ${opsTab==='docs'?'active':''}" data-otab="docs" onclick="opsSetTab('docs')">${a('المستندات','Documents')}</button>
-      ${['issued','done'].includes(r.opsStatus) ? `<button class="sheet-tab ${opsTab==='invoice'?'active':''}" data-otab="invoice" onclick="opsSetTab('invoice')" style="${r.opsStatus==='issued'?'color:var(--blue);font-weight:700':''}">${a('الفاتورة والدفعات','Invoice & Payments')}</button>` : ''}
       <button class="sheet-tab ${opsTab==='opsnotes'?'active':''}" data-otab="opsnotes" onclick="opsSetTab('opsnotes')">${a('ملاحظات داخلية','Internal Notes')}</button>
       <button class="sheet-tab ${opsTab==='history'?'active':''}" data-otab="history" onclick="opsSetTab('history')">${a('السجل','History')}</button>
     </div>
@@ -5469,111 +5502,11 @@ function opsTabContent(r, c){
     </div>` : ''}`;
   }
   if(opsTab === 'invoice'){
-    const inv = r.invoice || {};
-    const inst = r.installments || [];
-    const totalInst = inst.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
-    const paidInst  = inst.filter(x=>x.status==='paid').reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
-    const ex = r.execution || {};
-    return `
-    <div style="display:flex;flex-direction:column;gap:18px">
-      <!-- بيانات الفاتورة -->
-      <div class="card" style="padding:18px">
-        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">${a('بيانات الفاتورة','Invoice Details')}</div>
-        <div class="field-grid">
-          <div class="field-row"><span class="field-row-label">${a('رقم الفاتورة','Invoice No.')}</span>
-            <input id="inv-num" class="fi" dir="ltr" value="${inv.number||''}" placeholder="${a('مثال: INV-2024-001','e.g. INV-2024-001')}"/></div>
-          <div class="field-row"><span class="field-row-label">${a('تاريخ الفاتورة','Invoice Date')}</span>
-            <input id="inv-date" class="fi" type="date" dir="ltr" value="${inv.date||''}"/></div>
-          <div class="field-row"><span class="field-row-label">${a('القسط الإجمالي','Total Premium')}</span>
-            <input id="inv-total" class="fi" type="number" dir="ltr" step="0.01" value="${inv.total||(ex.finalPremium||'')||''}" placeholder="0.00"
-              oninput="opsUpdateInstTotal()"/></div>
-          <div class="field-row full"><span class="field-row-label">${a('ملاحظات','Notes')}</span>
-            <input id="inv-notes" class="fi" value="${inv.notes||''}" placeholder="${a('ملاحظات الفاتورة...','Invoice notes...')}"/></div>
-        </div>
-      </div>
-      <!-- جدول الدفعات -->
-      <div class="card" style="padding:18px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--text)">${a('جدول الدفعات','Payment Schedule')}</div>
-            <div style="font-size:11.5px;color:var(--text2);margin-top:2px">
-              ${a('إجمالي الدفعات:','Total scheduled:')}
-              <strong dir="ltr">${fmtMoney(totalInst)}</strong>
-              ${paidInst>0 ? `· ${a('مدفوع:','Paid:')} <strong style="color:var(--success)" dir="ltr">${fmtMoney(paidInst)}</strong>` : ''}
-            </div>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <input id="inst-split-n" type="number" min="1" max="24" value="1" dir="ltr"
-              style="width:56px;height:32px;border:1.5px solid var(--border);border-radius:8px;padding:0 8px;font-family:var(--font);font-size:12px;text-align:center"/>
-            <button class="btn btn-o btn-sm" onclick="opsSplitInstallments()" style="height:32px">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-              ${a('تقسيم متساوي','Equal Split')}
-            </button>
-            <button class="btn btn-o btn-sm" onclick="opsAddInstallment()" style="height:32px">+</button>
-          </div>
-        </div>
-        <div id="inst-table">
-          ${inst.length === 0 ? `<div style="text-align:center;padding:24px;color:var(--text3);font-size:12.5px">${a('لا توجد دفعات — اضغط + أو استخدم التقسيم المتساوي','No installments — press + or use equal split')}</div>` :
-          `<table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:var(--bg)">
-              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">#</th>
-              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('المبلغ','Amount')}</th>
-              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('تاريخ الاستحقاق','Due Date')}</th>
-              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('الحالة','Status')}</th>
-              <th style="padding:8px 12px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:1px solid var(--border)">${a('تحصيل','Collect')}</th>
-              <th style="padding:8px 4px;border-bottom:1px solid var(--border)"></th>
-            </tr></thead>
-            <tbody>
-              ${inst.map((x,i)=>{
-                const today = new Date().toISOString().slice(0,10);
-                const due = x.dueDate || '';
-                const isPaid = x.status === 'paid';
-                const isOverdue = !isPaid && due && due < today;
-                const isSoon = !isPaid && !isOverdue && due && due <= new Date(Date.now()+14*864e5).toISOString().slice(0,10);
-                const dotColor = isPaid ? '#16a34a' : isOverdue ? '#dc2626' : isSoon ? '#d97706' : '#94a3b8';
-                const dotTitle = isPaid ? a('مدفوع','Paid') : isOverdue ? a('متأخر','Overdue') : isSoon ? a('مستحق قريباً','Due soon') : a('قادم','Upcoming');
-                return `
-              <tr style="border-bottom:1px solid var(--border);background:${isOverdue&&!isPaid?'#fff5f5':isSoon&&!isPaid?'#fffbeb':''}">
-                <td style="padding:8px 12px;font-size:12.5px;font-weight:700;color:var(--text2)">
-                  <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dotColor};margin-inline-end:6px" title="${dotTitle}"></span>${i+1}
-                </td>
-                <td style="padding:6px 12px">
-                  <input class="fi" type="number" step="0.01" dir="ltr" value="${x.amount||''}" placeholder="0.00"
-                    style="width:110px;height:30px;font-size:12px"
-                    onchange="opsUpdateInst(${i},'amount',this.value)"/>
-                </td>
-                <td style="padding:6px 12px">
-                  <input class="fi" type="date" dir="ltr" value="${x.dueDate||''}"
-                    style="height:30px;font-size:12px"
-                    onchange="opsUpdateInst(${i},'dueDate',this.value)"/>
-                </td>
-                <td style="padding:8px 12px">
-                  <span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${isPaid?'#dcfce7':isOverdue?'#fee2e2':isSoon?'#fef3c7':'#f1f5f9'};color:${isPaid?'#16a34a':isOverdue?'#dc2626':isSoon?'#b45309':'#64748b'}">
-                    ${isPaid?a('محصَّل','Collected'):isOverdue?a('متأخر','Overdue'):isSoon?a('مستحق قريباً','Due Soon'):a('قادم','Upcoming')}
-                  </span>
-                </td>
-                <td style="padding:6px 12px">
-                  ${isPaid
-                    ? `<button onclick="opsMarkInstPaid(${i},false)" style="border:1.5px solid #86efac;background:#dcfce7;color:#15803d;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">✓ ${a('تم','Done')}</button>`
-                    : `<button onclick="opsMarkInstPaid(${i},true)" style="border:1.5px solid var(--border);background:var(--white);color:var(--text2);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600">${a('تأكيد التحصيل','Mark Collected')}</button>`
-                  }
-                </td>
-                <td style="padding:6px 4px;text-align:center">
-                  <button onclick="opsRemoveInstallment(${i})"
-                    style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:4px;border-radius:4px"
-                    onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text3)'">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
-                  </button>
-                </td>
-              </tr>`;}).join('')}
-            </tbody>
-          </table>`}
-        </div>
-      </div>
-      <!-- زر الحفظ -->
-      <div style="display:flex;gap:10px">
-        <button class="btn btn-o btn-sm" onclick="opsSaveInvoice(false)">${a('حفظ','Save')}</button>
-      </div>
+    return `<div style="padding:32px;text-align:center;color:var(--text2)">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.5" style="margin-bottom:12px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">${a('جدول الدفعات في سجل الوثائق','Payment schedule is managed in Policy Registry')}</div>
+      <div style="font-size:12.5px;color:var(--text3);margin-bottom:16px">${a('لإدخال خطة الدفع أو توليد جدول التحصيل، انتقل لسجل الوثائق.','To set a payment plan or auto-generate a collection schedule, go to Policy Registry.')}</div>
+      <button class="btn btn-p btn-sm" onclick="opsSetListTab('policies')">${a('→ سجل الوثائق','→ Policy Registry')}</button>
     </div>`;
   }
   if(opsTab === 'opsnotes'){
@@ -5925,7 +5858,6 @@ function opsIssuePolicy(){
 function opsMarkDone(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
-  opsSaveInvoice(false);
   addHistory(r, a('صدرت الوثيقة','Policy Issued'), a('مكتمل — أُرسل للمبيعات','Done — sent to sales'));
   r.opsStatus = 'done';
   sbSyncReq(opsCurrentId);
@@ -5955,9 +5887,7 @@ function opsMarkDone(){
 function opsSendToSales(){
   const r = requests.find(x => x.id === opsCurrentId);
   if(!r) return;
-  opsSaveInvoice(false);
-  if(!r.invoice?.number){ alert(a('أدخل رقم الفاتورة أولاً','Enter invoice number first')); return; }
-  if(!r.installments?.length){ if(!confirm(a('لم تحدد دفعات — هل تريد الإرسال بدون دفعات؟','No installments set — send anyway?'))) return; }
+  if(!r.installments?.length){ if(!confirm(a('لم تُحدَّد خطة دفع — هل تريد الإرسال بدون جدول تحصيل؟','No payment schedule set — send anyway?'))) return; }
   opsMarkDone();
 }
 
@@ -6184,11 +6114,50 @@ function opsAutoGenInstallments(){
   if(!r.installments) r.installments = [];
   if(r.installments.length && !confirm(a('سيتم استبدال جدول الدفعات الحالي. هل تريد المتابعة؟','This will replace the current schedule. Continue?'))) return;
   r.installments = installments;
-  if(!r.invoice) r.invoice = {};
-  r.invoice.total = premium;
   sbSyncReq(opsCurrentId);
-  opsTab = 'invoice';
+  opsTab = 'execution';
   navigate('operations');
+}
+
+function opsPolicySavePayMethod(reqId, method){
+  const r = requests.find(x => String(x.id) === String(reqId));
+  if(!r) return;
+  if(!r.execution) r.execution = {};
+  r.execution.paymentMethod = method;
+  sbSyncReq(r.id);
+}
+
+function opsPolicyAutoGen(reqId){
+  const r = requests.find(x => String(x.id) === String(reqId));
+  if(!r) return;
+  const sel = document.getElementById('pol-paymethod');
+  const method = (sel ? sel.value : '') || r.execution?.paymentMethod;
+  if(!method || method === 'custom'){ alert(a('اختر طريقة دفع صالحة لتوليد الجدول تلقائياً','Select a valid payment method to auto-generate')); return; }
+  const ex = r.execution || {};
+  const premium = parseFloat(ex.finalPremium) || 0;
+  if(!premium){ alert(a('القسط النهائي غير محدد في بيانات الوثيقة','Final premium not set in policy data')); return; }
+  const startDate = ex.policyStart;
+  if(!startDate){ alert(a('تاريخ بداية الوثيقة غير محدد في بيانات الوثيقة','Policy start date not set')); return; }
+  if(!r.execution) r.execution = {};
+  r.execution.paymentMethod = method;
+  const addMonths = (dateStr, n) => { const d = new Date(dateStr); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10); };
+  let installments = [];
+  if(method === 'full'){
+    installments = [{amount: premium, dueDate: startDate, status:'pending'}];
+  } else if(method === 'quarterly'){
+    const amt = Math.round(premium/4*100)/100;
+    const rem = Math.round((premium-amt*3)*100)/100;
+    installments = [0,3,6,9].map((m,i)=>({amount:i===3?rem:amt, dueDate:addMonths(startDate,m), status:'pending'}));
+  } else if(method === 'semi'){
+    const amt = Math.round(premium/2*100)/100;
+    const rem = Math.round((premium-amt)*100)/100;
+    installments = [0,6].map((m,i)=>({amount:i===1?rem:amt, dueDate:addMonths(startDate,m), status:'pending'}));
+  }
+  if(r.installments?.length && !confirm(a('سيُستبدل جدول الدفعات الحالي. متابعة؟','This will replace the current schedule. Continue?'))) return;
+  r.installments = installments;
+  sbSyncReq(r.id);
+  const c = document.getElementById('appContent');
+  if(c){ c.innerHTML = pgOps(); setTimeout(initOps, 0); }
 }
 
 
@@ -6200,15 +6169,16 @@ function opsAutoGenInstallments(){
 
 // أنواع العملاء (مرنة — الأدمين يضيف/يحذف). form يحدد الحقول: individual=فرد، company=شركة
 let CONTACT_TYPES = [
-  {id:'client',   ar:'عميل',        en:'Client',     color:'#1e4d8c', form:'individual'},
-  {id:'insurer',  ar:'شركة تأمين',  en:'Insurer',    color:'#0e7490', form:'company'},
-  {id:'supplier', ar:'مورد',        en:'Supplier',   color:'#b8740f', form:'company'},
-  {id:'owner',    ar:'مالك',        en:'Owner',      color:'#6b46a8', form:'individual'},
-  {id:'broker',   ar:'وسيط',        en:'Broker',     color:'#1e7a52', form:'company'},
-  {id:'legal',    ar:'مكتب قانوني', en:'Legal',      color:'#c0392b', form:'company'},
-  {id:'gov',      ar:'جهة حكومية',  en:'Government', color:'#475569', form:'company'},
-  {id:'employee', ar:'موظف',        en:'Employee',   color:'#1e7a52', form:'individual'},
-  {id:'other',    ar:'أخرى',        en:'Other',      color:'#64748b', form:'company'},
+  {id:'client',       ar:'عميل',              en:'Client',           color:'#1e4d8c', form:'individual'},
+  {id:'insurer',      ar:'شركة تأمين',        en:'Insurer',          color:'#0e7490', form:'company'},
+  {id:'supplier',     ar:'مورد',              en:'Supplier',         color:'#b8740f', form:'company'},
+  {id:'owner',        ar:'مالك',              en:'Owner',            color:'#6b46a8', form:'individual'},
+  {id:'broker',       ar:'وسيط',              en:'Broker',           color:'#1e7a52', form:'company'},
+  {id:'legal',        ar:'مكتب قانوني',       en:'Legal',            color:'#c0392b', form:'company'},
+  {id:'gov',          ar:'جهة حكومية',        en:'Government',       color:'#475569', form:'company'},
+  {id:'sales_agent',  ar:'مندوب مبيعات',      en:'Sales Agent',      color:'#7c3aed', form:'individual'},
+  {id:'employee',     ar:'موظف داخلي',        en:'Internal Employee',color:'#1e7a52', form:'individual'},
+  {id:'other',        ar:'أخرى / عميل قديم', en:'Client/Other',     color:'#64748b', form:'company'},
 ];
 function ctForm(catId){ const t = CONTACT_TYPES.find(x => x.id === catId); return t ? (t.form||'company') : 'company'; }
 function ctType(id){ return CONTACT_TYPES.find(t => t.id === id) || CONTACT_TYPES[CONTACT_TYPES.length-1]; }
@@ -6628,7 +6598,7 @@ function ccTabContent(c){
     // العنوان الكامل المنسّق
     const addrLine = [c.shortaddr, c.building && a('مبنى ','Bldg ')+c.building, c.street, c.district, [c.city,c.country].filter(Boolean).join(' ')].filter(Boolean).join('، ') || c.address || '—';
 
-    // CLIENT — تخطيط عمودين زي الصورة
+    // CLIENT — تخطيط عمودين
     if(c.cat === 'client'){
       return `
       <div class="cc-two-col">
@@ -6644,6 +6614,46 @@ function ccTabContent(c){
           ${ccVRow(a('النشاط التجاري','Business Activity'), c.activity)}
           ${ccVRow(a('الموقع','Website'), c.website, 'ltr')}
           ${ccVRow(a('الحالة','Status'), ccStatusLabel(c.status))}
+        </div>
+      </div>`;
+    }
+
+    // SALES AGENT — مندوب مبيعات
+    if(c.cat === 'sales_agent'){
+      return `
+      <div class="cc-two-col">
+        <div class="cc-col">
+          ${ccVRow(a('التصنيف','Category'), lang==='ar'?ctType(c.cat).ar:ctType(c.cat).en)}
+          ${ccVRow(a('نسبة العمولة الافتراضية %','Default Commission %'), c.agent_commission_rate!=null?c.agent_commission_rate+'%':null, 'ltr')}
+          ${ccVRow(a('الهوية الوطنية / الإقامة','National ID / Iqama'), c.idnum, 'ltr')}
+          ${ccVRow(a('تاريخ بداية التعاقد','Contract Start Date'), c.contract_start_date, 'ltr')}
+        </div>
+        <div class="cc-col">
+          ${ccVRow(a('تفاصيل العنوان','Address'), addrLine)}
+          ${ccVRow(a('الحالة','Status'), ccStatusLabel(c.status))}
+          ${c.linked_user_id ? ccVRow(a('مرتبط بمستخدم','Linked User ID'), c.linked_user_id, 'ltr') : ''}
+        </div>
+      </div>`;
+    }
+
+    // EMPLOYEE — موظف داخلي
+    if(c.cat === 'employee'){
+      return `
+      <div class="cc-two-col">
+        <div class="cc-col">
+          ${ccVRow(a('التصنيف','Category'), lang==='ar'?ctType(c.cat).ar:ctType(c.cat).en)}
+          ${ccVRow(a('المسمى الوظيفي','Job Title'), c.job_title)}
+          ${ccVRow(a('القسم','Department'), c.dept)}
+          ${ccVRow(a('الدور','Role'), c.role)}
+          ${ccVRow(a('الرقم الوظيفي','Employee ID'), c.employee_id, 'ltr')}
+          ${ccVRow(a('تاريخ الانضمام','Joined'), c.joined, 'ltr')}
+        </div>
+        <div class="cc-col">
+          ${ccVRow(a('الراتب (ر.س)','Salary (SAR)'), c.salary!=null?fmtMoney(c.salary):null, 'ltr')}
+          ${ccVRow(a('العمولة %','Commission %'), c.commission!=null?c.commission+'%':null, 'ltr')}
+          ${ccVRow(a('الهوية الوطنية','National ID'), c.idnum, 'ltr')}
+          ${ccVRow(a('الحالة','Status'), ccStatusLabel(c.status))}
+          ${c.linked_user_id ? ccVRow(a('مرتبط بمستخدم','Linked User ID'), c.linked_user_id, 'ltr') : ''}
         </div>
       </div>`;
     }
@@ -6867,20 +6877,49 @@ function ccEditFields(c, cat){
     </div>`;
   }
 
-  // ═══ EMPLOYEE ═══
+  // ═══ SALES AGENT (مندوب مبيعات) ═══
+  if(cat === 'sales_agent'){
+    return `
+    <div class="cc-two-col">
+      <div class="cc-col">
+        <div class="field-row"><span class="field-row-label">${a('التصنيف','Category')}</span>${ccLockCat ? `<span class="cc-readonly" style="font-weight:600;color:var(--text)">${lang==='ar'?ctType(cat).ar:ctType(cat).en}</span>` : `<select id="ef-cat" onchange="ccCatChanged()">${CONTACT_TYPES.map(ty=>`<option value="${ty.id}" ${cat===ty.id?'selected':''}>${lang==='ar'?ty.ar:ty.en}</option>`).join('')}</select>`}</div>
+        <div class="field-row"><span class="field-row-label">${a('نسبة العمولة الافتراضية %','Default Commission %')}</span>
+          <input id="ef-agent-comm" type="number" step="0.01" min="0" max="100" dir="ltr" value="${v('agent_commission_rate','0')}" placeholder="0.00"/>
+        </div>
+        <div class="field-row"><span class="field-row-label">${a('الهوية الوطنية / الإقامة','National ID / Iqama')}</span>
+          <input id="ef-idnum" dir="ltr" value="${v('idnum')}" placeholder="1xxxxxxxxx"/>
+        </div>
+        <div class="field-row"><span class="field-row-label">${a('تاريخ بداية التعاقد','Contract Start Date')}</span>
+          <input id="ef-contract-start" type="date" dir="ltr" value="${v('contract_start_date')}"/>
+        </div>
+        <div class="field-row"><span class="field-row-label">${a('الحالة','Status')}</span>
+          <select id="ef-stat">${CC_STATUSES.map(s=>`<option value="${s.id}" ${ccStatusId(v('status','active'))===s.id?'selected':''}>${lang==='ar'?s.ar:s.en}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="cc-col">
+        ${addressBlock}
+        <input type="hidden" id="ef-linked-user-id" value="${v('linked_user_id')}"/>
+      </div>
+    </div>`;
+  }
+
+  // ═══ EMPLOYEE (موظف داخلي) ═══
   if(cat === 'employee'){
     return `
     <div class="cc-two-col">
       <div class="cc-col">
         <div class="field-row"><span class="field-row-label">${a('التصنيف','Category')}</span>${ccLockCat ? `<span class="cc-readonly" style="font-weight:600;color:var(--text)">${lang==='ar'?ctType(cat).ar:ctType(cat).en}</span>` : `<select id="ef-cat" onchange="ccCatChanged()">${CONTACT_TYPES.map(ty=>`<option value="${ty.id}" ${cat===ty.id?'selected':''}>${lang==='ar'?ty.ar:ty.en}</option>`).join('')}</select>`}</div>
+        <div class="field-row"><span class="field-row-label">${a('المسمى الوظيفي','Job Title')}</span>
+          <input id="ef-job-title" value="${v('job_title')}" placeholder="${a('مثال: محاسب، مدير أوبريشن...','e.g. Accountant, Ops Manager...')}"/>
+        </div>
         <div class="field-row"><span class="field-row-label">${a('القسم','Department')}</span>
           <select id="ef-dept">
-            <option value="all"      ${v('dept')==='all'       ?'selected':''}>${a('كل الأقسام','All')}</option>
-            <option value="finance"  ${v('dept')==='finance'   ?'selected':''}>${a('المالية','Finance')}</option>
-            <option value="sales"    ${v('dept')==='sales'     ?'selected':''}>${a('المبيعات','Sales')}</option>
-            <option value="operations" ${v('dept')==='operations'?'selected':''}>${a('الأوبريشن','Operations')}</option>
-            <option value="customers"${v('dept')==='customers' ?'selected':''}>${a('خدمة العملاء','Customers')}</option>
-            <option value="hr"       ${v('dept')==='hr'        ?'selected':''}>${a('الموارد البشرية','HR')}</option>
+            <option value="all"        ${v('dept')==='all'         ?'selected':''}>${a('كل الأقسام','All')}</option>
+            <option value="finance"    ${v('dept')==='finance'     ?'selected':''}>${a('المالية','Finance')}</option>
+            <option value="sales"      ${v('dept')==='sales'       ?'selected':''}>${a('المبيعات','Sales')}</option>
+            <option value="operations" ${v('dept')==='operations'  ?'selected':''}>${a('الأوبريشن','Operations')}</option>
+            <option value="customers"  ${v('dept')==='customers'   ?'selected':''}>${a('خدمة العملاء','Customers')}</option>
+            <option value="hr"         ${v('dept')==='hr'          ?'selected':''}>${a('الموارد البشرية','HR')}</option>
           </select>
         </div>
         <div class="field-row"><span class="field-row-label">${a('الدور','Role')}</span>
@@ -6890,6 +6929,9 @@ function ccEditFields(c, cat){
             <option value="superadmin" ${v('role')==='superadmin'?'selected':''}>${a('مدير النظام','Sys. Admin')}</option>
           </select>
         </div>
+        <div class="field-row"><span class="field-row-label">${a('الرقم الوظيفي','Employee ID')}</span>
+          <input id="ef-employee-id" dir="ltr" value="${v('employee_id')}" placeholder="${a('مثال: EMP-001','e.g. EMP-001')}"/>
+        </div>
         <div class="field-row"><span class="field-row-label">${a('تاريخ الانضمام','Joined')}</span><input id="ef-joined" type="date" value="${v('joined')}"/></div>
       </div>
       <div class="cc-col">
@@ -6897,6 +6939,7 @@ function ccEditFields(c, cat){
         <div class="field-row"><span class="field-row-label">${a('العمولة %','Commission %')}</span><input id="ef-commission" type="number" value="${v('commission','0')}" placeholder="0" min="0" max="100" dir="ltr"/></div>
         <div class="field-row"><span class="field-row-label">${a('الهوية الوطنية','National ID')}</span><input id="ef-idnum" dir="ltr" value="${v('idnum')}" placeholder="1xxxxxxxxx"/></div>
         <div class="field-row"><span class="field-row-label">${a('الحالة','Status')}</span><select id="ef-stat">${CC_STATUSES.map(s=>`<option value="${s.id}" ${ccStatusId(v('status','active'))===s.id?'selected':''}>${lang==='ar'?s.ar:s.en}</option>`).join('')}</select></div>
+        <input type="hidden" id="ef-linked-user-id" value="${v('linked_user_id')}"/>
       </div>
     </div>`;
   }
@@ -6957,6 +7000,12 @@ function ccCaptureEditValues(){
     shortaddr:g('ef-shortaddr'), building:g('ef-building'), secondary:g('ef-secondary'), postal:g('ef-postal'),
     street:g('ef-street'), district:g('ef-district'), city:g('ef-city'), country:g('ef-country'),
     status:g('ef-stat')||base.status,
+    dept:g('ef-dept')||base.dept, role:g('ef-role')||base.role, joined:g('ef-joined')||base.joined,
+    job_title:g('ef-job-title')||base.job_title,
+    employee_id:g('ef-employee-id')||base.employee_id,
+    agent_commission_rate:g('ef-agent-comm')||base.agent_commission_rate,
+    contract_start_date:g('ef-contract-start')||base.contract_start_date,
+    linked_user_id:g('ef-linked-user-id')||base.linked_user_id,
   };
 }
 
@@ -7052,6 +7101,11 @@ async function ccSave(){
     salary: document.getElementById('ef-salary') ? parseFloat(g('ef-salary'))||0 : undefined,
     commission: document.getElementById('ef-commission') ? parseFloat(g('ef-commission'))||0 : undefined,
     joined: g('ef-joined') || undefined,
+    job_title: g('ef-job-title') || undefined,
+    employee_id: g('ef-employee-id') || undefined,
+    agent_commission_rate: document.getElementById('ef-agent-comm') ? parseFloat(g('ef-agent-comm'))||0 : undefined,
+    contract_start_date: g('ef-contract-start') || undefined,
+    linked_user_id: g('ef-linked-user-id') || undefined,
   };
   if(!d.name){ document.getElementById('ef-name')?.focus(); return; }
   let savedId = ccCurrentId;
