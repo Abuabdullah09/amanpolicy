@@ -2551,7 +2551,7 @@ async function loadAllData(){
   try {
     const {data:pRows} = await sb.from('profiles').select('*');
     if(pRows && pRows.length){
-      users = pRows.map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, role:normalizeRole(p.role||'sales', p.dept||''), pages:p.pages||null, features:p.features||[]}));
+      users = pRows.map(p=>({id:String(p.id), name:p.name||p.email, nEn:p.name_en||p.email, user:p.username||p.email, dept:p.dept||'', role:normalizeRole(p.role||'sales', p.dept||''), pages:p.pages||null, features:p.features||[]}));
       localStorage.setItem('aman_users', JSON.stringify(users));
     }
   } catch(e){
@@ -2592,7 +2592,7 @@ async function afterLogin(user){
   };
   try {
     const {data:p} = await sb.from('profiles').select('*').eq('id',user.id).single();
-    if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.role=normalizeRole(p.role||'superadmin',p.dept||''); curUser.pages=p.pages||null; curUser.features=p.features||[]; }
+    if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.dept=p.dept||''; curUser.role=normalizeRole(p.role||'superadmin',p.dept||''); curUser.pages=p.pages||null; curUser.features=p.features||[]; }
   } catch(e){ console.warn('profile load failed', e); }
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
   const _cuIdx = users.findIndex(u => u.id === curUser.id);
@@ -2651,16 +2651,16 @@ function canAccess(page){ return pageLevel(page) !== 'none'; }
 function canEdit(page){ return pageLevel(page) === 'edit'; }
 
 function _role(){ return curUser ? normalizeRole(curUser.role, curUser.dept) : ''; }
-function isMgr(){        return curUser && ['superadmin','sales_manager','ops_manager','finance_manager'].includes(_role()); }
-function isSalesMgr(){   return _role()==='sales_manager'; }
-function isSalesEmp(){   return _role()==='sales'; }
-function isOpsMgr(){     return _role()==='ops_manager'; }
-function isOpsEmp(){     return _role()==='operations'; }
-function isOpsUser(){    return ['operations','ops_manager'].includes(_role()); }
-function isFinUser(){    return ['finance','finance_manager'].includes(_role()); }
-function isFinMgr(){     return _role()==='finance_manager'; }
-function isCSUser(){     return _role()==='cs'; }
-function isHRUser(){     return _role()==='hr'; }
+function isMgr(){        return curUser && (['superadmin','sales_manager','ops_manager','finance_manager'].includes(_role()) || curUser.role==='manager'); }
+function isSalesMgr(){   return _role()==='sales_manager' || (curUser?.role==='manager' && curUser?.dept==='sales'); }
+function isSalesEmp(){   return _role()==='sales'        || (curUser?.role==='employee' && curUser?.dept==='sales'); }
+function isOpsMgr(){     return _role()==='ops_manager'  || (curUser?.role==='manager' && curUser?.dept==='operations'); }
+function isOpsEmp(){     return _role()==='operations'   || (curUser?.role==='employee' && curUser?.dept==='operations'); }
+function isOpsUser(){    return isOpsMgr() || isOpsEmp(); }
+function isFinUser(){    return ['finance','finance_manager'].includes(_role()) || curUser?.dept==='finance'; }
+function isFinMgr(){     return _role()==='finance_manager' || (curUser?.role==='manager' && curUser?.dept==='finance'); }
+function isCSUser(){     return _role()==='cs' || curUser?.dept==='customers'; }
+function isHRUser(){     return _role()==='hr' || curUser?.dept==='hr'; }
 function canViewPolicyCentral(){ return curUser && (isMgr()||isOpsUser()||isFinUser()||isCSUser()); }
 
 /* هل يقدر المستخدم الحالي يعدّل على طلب مبيعات معيّن؟ */
@@ -2674,7 +2674,11 @@ function salesUserCanEdit(r){
 
 /* هل يقدر المستخدم الحالي يُسند طلبات في العمليات؟ */
 function opsUserCanAssign(){
-  return curUser && (curUser.role==='superadmin' || isOpsMgr());
+  if(!curUser) return false;
+  if(curUser.role==='superadmin') return true;
+  if(isOpsMgr()) return true;
+  if(curUser.role==='manager' && curUser.dept==='operations') return true; // backward compat
+  return false;
 }
 
 
@@ -3393,7 +3397,7 @@ function dashOps(){
   </div>
 
   ${isMgrView ? (() => {
-    const opsUsers = users.filter(u => ['operations','ops_manager'].includes(u.role));
+    const opsUsers = users.filter(u => u.role==='operations');
     const teamRows = opsUsers.map(u => {
       const myActive = allOps.filter(r => !['done'].includes(r.opsStatus) && r.handledBy===u.user).length;
       const myDone   = requests.filter(r => ['issued','done'].includes(r.opsStatus) && r.handledBy===u.user).length;
@@ -6572,7 +6576,7 @@ function renderOpsTable(list){
                   class="fs"
                   style="font-size:12px;max-width:130px">
                   <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-                  ${users.filter(u=>u.dept==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+                  ${users.filter(u=>u.role==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
                 </select>
                 <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
                   class="btn btn-p btn-sm" style="padding:3px 8px;font-size:11px;white-space:nowrap">
@@ -6612,7 +6616,7 @@ function renderOpsCards(list){
             class="fs"
             style="flex:1;font-size:12px">
             <option value="">${a('— غير مُسند —','— Unassigned —')}</option>
-            ${users.filter(u=>u.dept==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
+            ${users.filter(u=>u.role==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}
           </select>
           <button onclick="opsAssignFromList('${r.id}',document.getElementById('ops-assign-sel-${r.id}').value)"
             class="btn btn-p btn-sm" style="padding:4px 10px;font-size:11.5px;white-space:nowrap">
@@ -7061,7 +7065,7 @@ function opsTabContent(r, c){
   if(opsTab === 'info'){
     const assignedUser  = users.find(u => u.user === r.assignedTo);
     const handledUser   = r.handledBy ? users.find(u => u.user === r.handledBy) : null;
-    const opsEmployees  = users.filter(u => u.dept === 'operations');
+    const opsEmployees  = users.filter(u => u.role==='operations');
     const isInbox       = (r.opsStatus || 'inbox') === 'inbox';
     return `
     <div class="field-grid">
