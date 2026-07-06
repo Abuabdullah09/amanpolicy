@@ -2585,14 +2585,22 @@ async function loadAllData(){
 }
 
 async function afterLogin(user){
-  // superadmin كـ fallback دائم — نحدّثه من الـ profile لو موجود
   curUser = {
     id: String(user.id), name: user.email, nEn: user.email,
-    user: user.email, role: 'superadmin', dept: 'all',
+    user: user.email, role: 'sales', dept: '',
   };
   try {
     const {data:p} = await sb.from('profiles').select('*').eq('id',user.id).single();
-    if(p){ curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email; curUser.user=p.username||user.email; curUser.dept=p.dept||''; curUser.role=normalizeRole(p.role||'superadmin',p.dept||''); curUser.pages=p.pages||null; curUser.features=p.features||[]; }
+    if(p){
+      curUser.name=p.name||user.email; curUser.nEn=p.name_en||user.email;
+      curUser.user=p.username||user.email; curUser.dept=p.dept||'';
+      curUser.role=normalizeRole(p.role||'sales',p.dept||'');
+      curUser.pages=p.pages||null; curUser.features=p.features||[];
+    } else {
+      // لا يوجد profile — تحقق إذا هو أول مستخدم في النظام
+      const {count} = await sb.from('profiles').select('*',{count:'exact',head:true});
+      if(count===0) curUser.role='superadmin';
+    }
   } catch(e){ console.warn('profile load failed', e); }
   try { await loadAllData(); } catch(e){ console.warn('loadAllData failed', e); }
   const _cuIdx = users.findIndex(u => u.id === curUser.id);
@@ -16992,7 +17000,7 @@ async function addUser(){
   if(adminSession) await sb.auth.setSession({access_token:adminSession.access_token, refresh_token:adminSession.refresh_token});
   _syncPermsDDToState('u');
   const pages=Object.keys(_uPagePerms).length ? _uPagePerms : defaultPages({role:r});
-  const {error:ie}=await sb.from('profiles').insert({id:uid, name:n, name_en:n, username, role:r, email, pages});
+  const {error:ie}=await sb.from('profiles').insert({id:uid, name:n, name_en:n, username, role:r, pages});
   if(ie){ _addingUser=false; if(btn){ btn.disabled=false; btn.textContent=a('إضافة مستخدم','Add User'); } alert(ie.message); return; }
   _addingUser=false;
   if(btn){ btn.disabled=false; btn.textContent=a('إضافة مستخدم','Add User'); }
