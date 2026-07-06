@@ -3789,11 +3789,9 @@ function updateSubnav(context){
       nav.innerHTML =
         btn('sdash', a('لوحة التحكم','Dashboard'), "salesNavGo('dashboard')", salesNavTab==='dashboard') +
         btn('slist', a('الطلبات','Requests'), "salesNavGo('list')", salesNavTab==='list') +
-        btn('spol',  a('الوثائق','Policies'),  "salesNavGo('policies')",  salesNavTab==='policies') +
-        (canAccess('operations') ? `<span style="margin:0 6px;color:var(--text3);align-self:center">|</span><button class="snav-item" onclick="crmSwitchTab('ops')">${a('الأوبريشن','Operations')} ›</button>` : '');
+        btn('spol',  a('الوثائق','Policies'),  "salesNavGo('policies')",  salesNavTab==='policies');
     } else {
       nav.innerHTML =
-        (canAccess('sales') ? `<button class="snav-item" onclick="crmSwitchTab('sales')">‹ ${a('المبيعات','Sales')}</button><span style="margin:0 6px;color:var(--text3);align-self:center">|</span>` : '') +
         btn('odash', a('لوحة التحكم','Dashboard'), "opsNavGo('dashboard')", opsNavTab==='dashboard') +
         btn('oreq',  a('الطلبات','Requests'),       "opsNavGo('requests')",  opsNavTab==='requests') +
         btn('opol',  a('الوثائق','Policies'),        "opsNavGo('policies')",  opsNavTab==='policies');
@@ -3837,8 +3835,8 @@ function pgSales(){
   if(salesNavTab === 'policies')  return salesPoliciesPage();
   return salesListPage();
 }
-function renderPipe(){ if(salesMode === 'list') renderSalesList(); }
-function initSales(){ if(salesMode === 'list') renderSalesList(); else if(salesMode === 'view' && salesTab === 'quotes') setTimeout(salesQuoteInitResize, 0); else if(salesMode === 'edit') setTimeout(salesApplyKindMode, 0); }
+function renderPipe(){ if(salesMode === 'list') renderReqList(); }
+function initSales(){ if(salesMode === 'list') renderReqList(); else if(salesMode === 'view' && salesTab === 'quotes') setTimeout(salesQuoteInitResize, 0); else if(salesMode === 'edit') setTimeout(salesApplyKindMode, 0); }
 
 
 /* ════════════════════════════════════════
@@ -6215,18 +6213,257 @@ function pgOps(){
   if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
   return opsListPage();
 }
-function initOps(){ if(opsMode === 'list' && opsNavTab === 'requests') renderOpsList(); }
+function initOps(){ if(opsMode === 'list' && opsNavTab === 'requests') renderReqList(); }
 
 /* ════════════════════════════════════════
    CRM — الصفحة الموحّدة (مبيعات + أوبريشن)
    ════════════════════════════════════════ */
 function pgCRM(){
-  if(isOpsEmp() && !isMgr()) crmTab = 'ops';
-  return crmTab === 'ops' ? pgOps() : pgSales();
+  if(isOpsEmp() && !isMgr()){
+    crmTab = 'ops';
+    if(opsMode === 'view') return opsViewSheet();
+    if(opsNavTab === 'dashboard') return dashOps();
+    if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
+    return reqListPage();
+  }
+  if(salesMode === 'view')   return salesViewSheet();
+  if(salesMode === 'edit')   return salesEditSheet();
+  if(salesMode === 'policy') return salesPolicySheet();
+  if(crmTab === 'ops'){
+    if(opsMode === 'view') return opsViewSheet();
+    if(opsNavTab === 'dashboard') return dashOps();
+    if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
+    return reqListPage();
+  }
+  if(salesNavTab === 'dashboard') return dashSales();
+  if(salesNavTab === 'policies')  return salesPoliciesPage();
+  return reqListPage();
 }
 function initCRM(){
-  if(crmTab === 'ops'){ if(typeof initOps === 'function') initOps(); }
-  else { if(typeof initSales === 'function') initSales(); }
+  const inOpsMode = isOpsEmp() && !isMgr();
+  if(inOpsMode || crmTab === 'ops'){
+    if(opsMode === 'list' && opsNavTab === 'requests') renderReqList();
+    return;
+  }
+  if(salesMode === 'list' && salesNavTab === 'list') renderReqList();
+  else if(salesMode === 'view' && salesTab === 'quotes') setTimeout(salesQuoteInitResize,0);
+  else if(salesMode === 'edit') setTimeout(salesApplyKindMode,0);
+}
+
+/* ════════════════════════════════════════
+   الصفحة الموحّدة للطلبات — بيانات وعرض
+   ════════════════════════════════════════ */
+const _reqColsDef = {client:true,salesRep:true,size:false,type:true,classification:false,tier:false,kind:false,quotes:true,status:true,priority:false,daysInStatus:false,nextAction:false,opsEmp:false,date:true};
+let reqCols = loadColPrefs('erp-req-cols', _reqColsDef);
+let reqSortDir = 'asc';
+let reqStatusFilter = 'all';
+let reqTypeFilter = 'all';
+let reqDateFrom = '', reqDateTo = '';
+let reqView = localStorage.getItem('erp-req-view') || 'list';
+let reqColPickerDD = false, reqStatusBarDD = false;
+
+function reqToggleCol(k,v){
+  reqCols[k]=v; saveColPrefs('erp-req-cols',reqCols);
+  const old=document.getElementById('req-col-picker-dd');
+  const pos=(old&&old.style.display!=='none')?{top:old.style.top,left:old.style.left,right:old.style.right}:null;
+  renderReqList();
+  if(pos){const nd=document.getElementById('req-col-picker-dd');if(nd){nd.style.top=pos.top;nd.style.left=pos.left;nd.style.right=pos.right;nd.style.display='block';reqColPickerDD=true;}}
+}
+function reqToggleSort(){ reqSortDir=reqSortDir==='desc'?'asc':'desc'; renderReqList(); }
+function reqSetView(v){ reqView=v; localStorage.setItem('erp-req-view',v); const c=document.getElementById('appContent');if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
+function reqToggleColPickerDD(e){
+  e.stopPropagation(); reqColPickerDD=!reqColPickerDD;
+  const d=document.getElementById('req-col-picker-dd'); if(!d) return;
+  if(reqColPickerDD){ const rect=e.currentTarget.getBoundingClientRect(); d.style.top=(rect.bottom+2)+'px'; if(lang==='ar'){d.style.left=rect.left+'px';d.style.right='auto';}else{d.style.right=(window.innerWidth-rect.right)+'px';d.style.left='auto';} d.style.display='block'; }
+  else d.style.display='none';
+}
+document.addEventListener('click', e => {
+  if(reqStatusBarDD&&!e.target.closest('#req-status-bar-dd')&&!e.target.closest('[onclick*="reqStatusBarToggle"]')){reqStatusBarDD=false;const d=document.getElementById('req-status-bar-dd');if(d)d.style.display='none';}
+  if(reqColPickerDD&&!e.target.closest('#req-col-picker-dd')&&!e.target.closest('[onclick*="reqToggleColPickerDD"]')){reqColPickerDD=false;const d=document.getElementById('req-col-picker-dd');if(d)d.style.display='none';}
+});
+
+function reqOpen(id){
+  const r=requests.find(x=>x.id===id); if(!r) return;
+  if(isOpsEmp()){ opsOpen(id); }
+  else if(isMgr()&&(r.status==='sent'||r.status==='lost')){ opsOpen(id); }
+  else { salesOpen(id); }
+}
+
+function reqFiltered(){
+  const q=(document.getElementById('req-q')?.value||'').toLowerCase().trim();
+  const isOps=isOpsEmp(), isSales=isSalesEmp();
+  let list=requests.filter(r=>{
+    if(isSales){ if(r.assignedTo!==curUser.user) return false; }
+    else if(isOps){
+      if(r.status!=='sent'&&r.status!=='lost') return false;
+      if(r.handledBy!==curUser.user) return false;
+    }
+    if(isOps){
+      if(opsFilter==='unassigned'){ if(r.handledBy) return false; }
+      else{ const os=r.opsStatus||'inbox'; if(opsFilter!=='all'&&os!==opsFilter) return false; }
+      if(opsTypeFilter!=='all'&&r.insType!==opsTypeFilter) return false;
+      if(opsSourceFilter==='cs'&&r.origin!=='cs') return false;
+      if(opsSourceFilter==='sales'&&r.origin==='cs') return false;
+    } else {
+      if(salDashFilter==='active')        return r.status==='draft'||r.status==='ready';
+      if(salDashFilter==='pendingOps')    return r.status==='sent'&&['inbox','received_assigned','processing','pricing','executing'].includes(r.opsStatus||'inbox');
+      if(salDashFilter==='waitingClient') return r.status==='sent'&&['sent_client','quote_ready','ready_to_send','waiting_client','approved'].includes(r.opsStatus);
+      if(salDashFilter==='stagnant')      return !['lost','done'].includes(r.opsStatus||'')&&r.status!=='lost'&&daysInCurrentStatus(r)>14;
+      if(reqStatusFilter!=='all'){
+        if(r.status!==reqStatusFilter&&(r.opsStatus||'inbox')!==reqStatusFilter) return false;
+      }
+      if(reqTypeFilter!=='all'&&r.insType!==reqTypeFilter) return false;
+      if(reqDateFrom&&r.created&&r.created<reqDateFrom) return false;
+      if(reqDateTo&&r.created&&r.created>reqDateTo+' 99') return false;
+    }
+    if(q){ const hay=(r.ref+' '+(salesClientName(r)||'')+' '+(r.notes||'')).toLowerCase(); if(!hay.includes(q)) return false; }
+    return true;
+  });
+  if(isOps){
+    if(opsListTab==='archive')  list=list.filter(r=>r.status==='lost'||r.opsStatus==='done');
+    else if(opsListTab==='issuance') list=list.filter(r=>r.status==='sent'&&['executing','issued','done'].includes(r.opsStatus));
+    else list=list.filter(r=>r.status==='sent'&&!['done'].includes(r.opsStatus));
+  }
+  list.sort((a,b)=>{const an=parseInt((a.ref||'').match(/(\d+)$/)?.[1])||parseInt(a.id)||0,bn=parseInt((b.ref||'').match(/(\d+)$/)?.[1])||parseInt(b.id)||0; return reqSortDir==='asc'?an-bn:bn-an;});
+  return list;
+}
+
+function reqStatusBarToggle(e){
+  e.stopPropagation(); reqStatusBarDD=!reqStatusBarDD;
+  const d=document.getElementById('req-status-bar-dd'); if(!d) return;
+  if(reqStatusBarDD){ const rect=e.currentTarget.getBoundingClientRect(),ddW=220; d.style.left='auto';d.style.right='auto'; if(rect.left+ddW<=window.innerWidth-8){d.style.left=rect.left+'px';}else{d.style.right=(window.innerWidth-rect.right)+'px';} d.style.top=(rect.bottom+4)+'px'; d.style.display='block'; }
+  else d.style.display='none';
+}
+function reqStatusBarSelect(id){ reqStatusFilter=id; reqStatusBarDD=false; const d=document.getElementById('req-status-bar-dd');if(d)d.style.display='none'; renderReqStatusBar(); renderReqList(); }
+function renderReqStatusBar(){ const w=document.getElementById('req-status-bar-wrap');if(w)w.innerHTML=reqStatusBarHTML(); }
+function reqStatusBarHTML(){
+  const isOps=isOpsEmp();
+  const statuses=isOps?OPS_STATUSES:SALES_STATUSES;
+  const active=reqStatusFilter==='all'?null:statuses.find(s=>s.id===reqStatusFilter);
+  const label=active?(lang==='ar'?active.ar:active.en):a('الكل','All');
+  const dotColor=active?active.color:'var(--text3)';
+  const isFiltered=reqStatusFilter!=='all';
+  const rows=[
+    `<div class="filt-dd-row ${reqStatusFilter==='all'?'active':''}" onclick="reqStatusBarSelect('all')" style="color:${reqStatusFilter==='all'?'var(--blue)':'var(--text)'}"><span class="filt-dd-dot" style="background:var(--text3)"></span><span style="flex:1">${a('الكل','All')}</span>${reqStatusFilter==='all'?`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`:''}</div>`,
+    ...statuses.map(s=>`<div class="filt-dd-row ${reqStatusFilter===s.id?'active':''}" onclick="reqStatusBarSelect('${s.id}')" style="color:${reqStatusFilter===s.id?s.color:'var(--text)'}"><span class="filt-dd-dot" style="background:${s.color}"></span><span style="flex:1">${lang==='ar'?s.ar:s.en}</span>${reqStatusFilter===s.id?`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="${s.color}" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`:''}</div>`)
+  ].join('');
+  return `<div style="position:relative"><button class="filt-btn" onclick="reqStatusBarToggle(event)" style="--filt-color:${isFiltered?dotColor:'var(--text2)'};--filt-border:${isFiltered?dotColor:'transparent'}"><span class="filt-btn-dot" style="background:${dotColor}"></span><span>${label}</span><svg class="filt-btn-chev" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></button><div class="filt-dd" id="req-status-bar-dd" style="direction:${lang==='ar'?'rtl':'ltr'}">${rows}</div></div>`;
+}
+
+function reqListPage(){
+  const canNew=salesUserCanEdit(null);
+  const isOps=isOpsEmp()&&!isMgr();
+  return `
+  ${heading(a('الطلبات','Requests'),'')}
+  <div class="cc-toolbar">
+    ${canNew?`<button class="btn btn-p cc-new-btn" onclick="salesNew()">+ ${a('طلب جديد','New Request')}</button>`:''}
+    <div class="srch-wr cc-search">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" id="req-q" placeholder="${a('بحث في الطلبات...','Search requests...')}" oninput="renderReqList()"/>
+    </div>
+    ${isOps?`<div id="ops-status-bar-wrap">${opsStatusBarHTML()}</div>`:`<div id="req-status-bar-wrap">${reqStatusBarHTML()}</div>`}
+    ${salDashFilter?`<button class="btn btn-o btn-sm" onclick="salDashFilter=null;renderReqList()">${a('مسح الفلتر','Clear filter')}</button>`:''}
+    <div style="margin-inline-start:auto;display:flex;gap:1px;align-self:center">
+      <button onclick="reqSetView('cards')" title="${a('بطاقات','Cards')}" style="width:26px;height:24px;border:none;background:transparent;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:${reqView==='cards'?'var(--blue)':'var(--text3)'};transition:color .13s" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='${reqView==='cards'?'var(--blue)':'var(--text3)'}'"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+      <button onclick="reqSetView('list')" title="${a('قائمة','List')}" style="width:26px;height:24px;border:none;background:transparent;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:${reqView==='list'?'var(--blue)':'var(--text3)'};transition:color .13s" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='${reqView==='list'?'var(--blue)':'var(--text3)'}'"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+    </div>
+  </div>
+  <div id="req-area"></div>`;
+}
+
+function renderReqList(){
+  const area=document.getElementById('req-area'); if(!area) return;
+  const list=reqFiltered();
+  if(!list.length){
+    const hasFilter=reqStatusFilter!=='all'||reqTypeFilter!=='all'||reqDateFrom||reqDateTo||salDashFilter;
+    area.innerHTML=`<div style="text-align:center;padding:44px;color:var(--text3);font-size:13px">${a('لا توجد طلبات','No requests found')}${hasFilter?`<div style="margin-top:14px"><button class="btn btn-o btn-sm" onclick="reqStatusFilter='all';reqTypeFilter='all';reqDateFrom='';reqDateTo='';salDashFilter=null;renderReqStatusBar();renderReqList()">${a('مسح الفلاتر','Clear Filters')}</button></div>`:''}</div>`;
+    return;
+  }
+  area.innerHTML=reqView==='cards'?renderReqCards(list):renderReqTable(list);
+  if(reqView==='list') setTimeout(()=>initColDrag('#req-area','erp-req-col-order'),0);
+}
+
+function renderReqTable(list){
+  const C=reqCols, canAssign=opsUserCanAssign();
+  return `<div class="card"><div class="tw"><table class="cc-table">
+    <thead><tr style="background:var(--bg);border-bottom:2px solid var(--border)">
+      <th class="cc-th" style="position:relative" draggable="true" data-col="ref">
+        <div style="display:flex;align-items:center;gap:5px"><span>${a('رقم الطلب','Ref')}</span>
+          <button class="col-sort-btn active" onclick="event.stopPropagation();reqToggleSort()" title="${a('ترتيب','Sort')}">${reqSortDir==='desc'?'↓':'↑'}</button>
+        </div><span class="cc-resize"></span>
+      </th>
+      ${C.client?`<th class="cc-th" style="position:relative" draggable="true" data-col="client"><span>${a('العميل','Client')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.salesRep?`<th class="cc-th" style="position:relative" draggable="true" data-col="salesRep"><span>${a('المندوب','Sales Rep')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.size?`<th class="cc-th" style="position:relative" draggable="true" data-col="size"><span>${a('حجم الشركة','Size')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.type?`<th class="cc-th" style="position:relative" draggable="true" data-col="type"><span>${a('نوع التأمين','Type')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.classification?`<th class="cc-th" style="position:relative" draggable="true" data-col="classification"><span>${a('التصنيف','Classification')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.tier?`<th class="cc-th" style="position:relative" draggable="true" data-col="tier"><span>${a('خاص/عادي','Tier')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.kind?`<th class="cc-th" style="position:relative" draggable="true" data-col="kind"><span>${a('نوع الطلب','Kind')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.quotes?`<th class="cc-th" style="position:relative" draggable="true" data-col="quotes"><span>${a('عروض الأسعار','Quotes')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.status?`<th class="cc-th" style="position:relative" draggable="true" data-col="status"><span>${a('الحالة','Status')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.priority?`<th class="cc-th" style="position:relative" draggable="true" data-col="priority"><span>${a('الأولوية','Priority')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.daysInStatus?`<th class="cc-th" style="position:relative;white-space:nowrap" draggable="true" data-col="daysInStatus"><span>${a('أيام في الحالة','Days in Status')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.nextAction?`<th class="cc-th" style="position:relative;white-space:nowrap" draggable="true" data-col="nextAction"><span>${a('موعد المتابعة','Next Action')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.opsEmp?`<th class="cc-th" style="position:relative" draggable="true" data-col="opsEmp"><span>${a('موظف الأوبريشن','Ops Officer')}</span><span class="cc-resize"></span></th>`:''}
+      ${C.date?`<th class="cc-th" style="position:relative" draggable="true" data-col="date"><span>${a('التاريخ','Date')}</span><span class="cc-resize"></span></th>`:''}
+      ${canAssign?`<th class="cc-th" style="min-width:130px"><span>${a('إسناد','Assign')}</span></th>`:''}
+      <th style="width:36px;position:relative;text-align:center;padding:0">
+        <button onclick="reqToggleColPickerDD(event)" title="${a('الأعمدة','Columns')}" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:6px;border-radius:5px;display:flex;align-items:center;justify-content:center;width:100%;height:100%" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--text3)'"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <div id="req-col-picker-dd" onmouseleave="this.style.display='none';reqColPickerDD=false" style="display:none;position:fixed;top:0;left:0;z-index:9100;background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;min-width:170px;box-shadow:0 8px 24px #0002">
+          <div style="font-size:10.5px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('إظهار الأعمدة','Show Columns')}</div>
+          ${[['client',a('العميل','Client')],['salesRep',a('المندوب','Sales Rep')],['size',a('حجم الشركة','Size')],['type',a('نوع التأمين','Type')],['classification',a('التصنيف','Classification')],['tier',a('خاص/عادي','Tier')],['kind',a('نوع الطلب','Kind')],['quotes',a('عروض الأسعار','Quotes')],['status',a('الحالة','Status')],['priority',a('الأولوية','Priority')],['daysInStatus',a('أيام في الحالة','Days in Status')],['nextAction',a('موعد المتابعة','Next Action')],['opsEmp',a('موظف الأوبريشن','Ops Officer')],['date',a('التاريخ','Date')]].map(([k,lbl])=>`<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:12.5px;color:var(--text)"><input type="checkbox" ${reqCols[k]?'checked':''} onchange="reqToggleCol('${k}',this.checked)" style="accent-color:var(--blue)"/> ${lbl}</label>`).join('')}
+        </div>
+      </th>
+    </tr></thead>
+    <tbody id="req-list-tbody">
+    ${list.map(r=>{
+      const st=salesStatus(r.status), clientName=salesClientName(r);
+      const stBadge=(r.status==='sent'&&r.opsStatus&&r.opsStatus!=='inbox')?badge(opsStatus(r.opsStatus).cls,opsStatusLabel(r.opsStatus)):badge(st.cls,salesStatusLabel(r.status));
+      const days=daysInCurrentStatus(r), qCount=(r.quotes||[]).length;
+      return `<tr style="cursor:pointer" onclick="reqOpen('${r.id}')">
+        <td><span style="font-family:'Inter',sans-serif;font-weight:700;color:var(--blue);font-size:12.5px">${r.ref}</span>${r.origin==='cs'?`<span style="font-size:10px;padding:1px 5px;border-radius:4px;background:#f3e8ff;color:#6b46a8;font-weight:700;margin-inline-start:3px">CS</span>`:''}</td>
+        ${C.client?`<td style="font-weight:600">${clientName||'<span style="color:var(--text3)">'+a('بدون عميل','No client')+'</span>'}</td>`:''}
+        ${C.salesRep?`<td style="font-size:12.5px">${(()=>{const u=users.find(x=>x.user===r.assignedTo);return u?(lang==='ar'?u.name:u.nEn):(r.assignedTo||'—');})()} </td>`:''}
+        ${C.size?`<td style="font-size:12.5px">${compSizeLabel(r.compSize)||'—'}</td>`:''}
+        ${C.type?`<td style="font-size:12.5px">${insTypeLabel(r.insType)}</td>`:''}
+        ${C.classification?`<td style="font-size:12.5px">${insSubLabel(r.insType,r.subType)||'—'}</td>`:''}
+        ${C.tier?`<td style="font-size:12.5px">${insTierLabel(r.tier)||'—'}</td>`:''}
+        ${C.kind?`<td style="font-size:12.5px">${reqKindLabel(r.reqKind)||'—'}</td>`:''}
+        ${C.quotes?`<td style="font-size:12.5px">${qCount>0?qCount+' '+a('عرض','quotes'):'<span style="color:var(--text3)">'+a('لا يوجد','none')+'</span>'}</td>`:''}
+        ${C.status?`<td>${stBadge}</td>`:''}
+        ${C.priority?`<td>${priorityBadge(r.priority)}</td>`:''}
+        ${C.daysInStatus?`<td style="font-size:12px;font-weight:600;color:${days>14?'var(--danger)':days>7?'#b8740f':'var(--text2)'}" dir="ltr">${days}d</td>`:''}
+        ${C.nextAction?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.followUp||'—'}</td>`:''}
+        ${C.opsEmp?`<td style="font-size:12.5px">${(()=>{const hu=users.find(x=>x.user===r.handledBy);return hu?(lang==='ar'?hu.name:hu.nEn):(r.handledBy?r.handledBy:`<span style="color:var(--text3)">${a('غير مُسند','Unassigned')}</span>`);})()}</td>`:''}
+        ${C.date?`<td style="font-size:12px;color:var(--text2)" dir="ltr">${r.created||'—'}</td>`:''}
+        ${canAssign?`<td onclick="event.stopPropagation()" style="padding:4px 8px"><div style="display:flex;align-items:center;gap:6px"><select id="req-assign-sel-${r.id}" class="fs" style="font-size:12px;max-width:130px"><option value="">${a('— غير مُسند —','— Unassigned —')}</option>${users.filter(u=>u.role==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}</select><button onclick="opsAssignFromList('${r.id}',document.getElementById('req-assign-sel-${r.id}').value)" class="btn btn-p btn-sm" style="padding:3px 8px;font-size:11px;white-space:nowrap">${a('إسناد','Assign')}</button></div></td>`:''}
+        <td></td>
+      </tr>`;
+    }).join('')}
+    </tbody></table></div></div>`;
+}
+
+function renderReqCards(list){
+  const canAssign=opsUserCanAssign();
+  return `<div class="cc-grid">`+list.map(r=>{
+    const st=salesStatus(r.status), qCount=(r.quotes||[]).length;
+    const stBadge=(r.status==='sent'&&r.opsStatus&&r.opsStatus!=='inbox')?badge(opsStatus(r.opsStatus).cls,opsStatusLabel(r.opsStatus)):badge(st.cls,salesStatusLabel(r.status));
+    const days=daysInCurrentStatus(r);
+    return `<div class="cc-card" onclick="reqOpen('${r.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <span style="font-family:'Inter',sans-serif;font-weight:800;color:var(--blue);font-size:14px">${r.ref}</span>${r.origin==='cs'?`<span style="font-size:10px;padding:1px 5px;border-radius:4px;background:#f3e8ff;color:#6b46a8;font-weight:700;margin-inline-start:4px">CS</span>`:''}
+        ${stBadge}
+      </div>
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:5px">${salesClientName(r)||a('بدون عميل','No client')}</div>
+      <div style="font-size:12.5px;color:var(--text2);margin-bottom:10px">${insTypeLabel(r.insType)}</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);padding-top:10px;border-top:1px solid var(--border)">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        ${qCount} ${a('عرض سعر','quotes')}
+        ${days>7?`<span style="margin-inline-start:auto;font-size:11px;color:${days>14?'var(--danger)':'#b8740f'}">${days}d</span>`:''}
+      </div>
+      ${canAssign?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)" onclick="event.stopPropagation()"><div style="display:flex;align-items:center;gap:6px"><select id="req-assign-sel-${r.id}" class="fs" style="flex:1;font-size:12px"><option value="">${a('— غير مُسند —','— Unassigned —')}</option>${users.filter(u=>u.role==='operations').map(u=>`<option value="${u.user}" ${r.handledBy===u.user?'selected':''}>${lang==='ar'?u.name:u.nEn}</option>`).join('')}</select><button onclick="opsAssignFromList('${r.id}',document.getElementById('req-assign-sel-${r.id}').value)" class="btn btn-p btn-sm" style="padding:4px 10px;font-size:11.5px;white-space:nowrap">${a('إسناد','Assign')}</button></div></div>`:''}
+    </div>`;
+  }).join('')+`</div>`;
 }
 function crmSwitchTab(tab){
   crmTab = tab;
@@ -6253,7 +6490,7 @@ function opsRequests(){
   if(opsListTab === 'issuance') return all.filter(r => r.status === 'sent' && ['executing','issued','done'].includes(r.opsStatus));
   return all.filter(r => r.status === 'sent' && !['done'].includes(r.opsStatus));
 }
-function opsSetListTab(t){ opsListTab=t; opsFilter='all'; opsPolMode='list'; opsPolCurrentId=null; opsPolQ=''; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsSetListTab(t){ opsListTab=t; opsFilter='all'; opsPolMode='list'; opsPolCurrentId=null; opsPolQ=''; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
 
 function opsNavTabBar(){
   const allR = opsRequestsAll();
@@ -6331,13 +6568,13 @@ function opStatusBarSelect(id){
   opsFilter = id; opStatusBarDD = false;
   const d = document.getElementById('ops-status-bar-dd'); if(d) d.style.display = 'none';
   renderOpsStatusBar();
-  renderOpsList();
+  renderReqList();
 }
 function opsSourceFilterSet(val){
   opsSourceFilter = val === opsSourceFilter ? 'all' : val;
   opStatusBarDD = false;
   const d = document.getElementById('ops-status-bar-dd'); if(d) d.style.display='none';
-  renderOpsStatusBar(); renderOpsList();
+  renderOpsStatusBar(); renderReqList();
 }
 function renderOpsStatusBar(){
   const w = document.getElementById('ops-status-bar-wrap');
@@ -6941,7 +7178,7 @@ function opsAssignFromList(requestId, userVal){
   }
   sbSyncReq(requestId);
   if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info');
-  renderOpsList();
+  renderReqList();
 }
 
 /* ════════════════════════════════════════
