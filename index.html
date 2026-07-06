@@ -6233,9 +6233,10 @@ function crmSwitchTab(tab){
 /* الطلبات الواردة للأوبريشن — مقسّمة حسب تبويب القائمة */
 function opsRequestsAll(){
   const all = requests.filter(r => r.status === 'sent' || r.status === 'lost');
-  if(!curUser || curUser.role==='superadmin' || isOpsMgr() || isFinUser()) return all;
-  if(isOpsEmp()) return all.filter(r => r.handledBy === curUser.user);
-  return all;
+  if(!curUser) return [];
+  if(curUser.role==='superadmin' || isOpsMgr() || isFinUser()) return all;
+  // الموظف يشوف فقط المسند له — هذا الـ default الآمن لأي دور غير محدد
+  return all.filter(r => r.handledBy === curUser.user);
 }
 function opsRequests(){
   const all = opsRequestsAll();
