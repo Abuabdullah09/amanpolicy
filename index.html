@@ -6213,7 +6213,7 @@ function pgOps(){
   if(opsMode === 'view') return opsViewSheet();
   if(opsNavTab === 'dashboard') return dashOps();
   if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
-  return `<div style="background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#92400e"><b>DEBUG:</b> role=${curUser?.role} | user=${curUser?.user} | handledBy_count=${requests.filter(r=>r.handledBy===curUser?.user).length}</div>` + opsListPage();
+  return opsListPage();
 }
 function initOps(){ if(opsMode === 'list' && opsNavTab === 'requests') renderOpsList(); }
 
@@ -6221,6 +6221,7 @@ function initOps(){ if(opsMode === 'list' && opsNavTab === 'requests') renderOps
    CRM — الصفحة الموحّدة (مبيعات + أوبريشن)
    ════════════════════════════════════════ */
 function pgCRM(){
+  if(isOpsEmp() && !isMgr()) crmTab = 'ops';
   return crmTab === 'ops' ? pgOps() : pgSales();
 }
 function initCRM(){
