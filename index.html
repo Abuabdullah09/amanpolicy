@@ -6242,6 +6242,7 @@ function crmSwitchTab(tab){
 function opsRequestsAll(){
   const all = requests.filter(r => r.status === 'sent' || r.status === 'lost');
   if(!curUser) return [];
+  console.log('[OPS-DEBUG] role:', curUser.role, '| dept:', curUser.dept, '| user:', curUser.user, '| isOpsMgr:', isOpsMgr(), '| isFinUser:', isFinUser(), '| isMgr:', isMgr());
   if(curUser.role==='superadmin' || isOpsMgr() || isFinUser()) return all;
   // الموظف يشوف فقط المسند له — هذا الـ default الآمن لأي دور غير محدد
   return all.filter(r => r.handledBy === curUser.user);
