@@ -6116,7 +6116,7 @@ function polPoliciesPage(){
   const sortIcon=d=>d==='desc'
     ?`<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
     :`<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
-  const th=(key,label)=>{const active=opsPolSortKey===key;return `<th onclick="opsPolDoSort('${key}')" style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:${active?'var(--blue)':'var(--text2)'};cursor:pointer;user-select:none;white-space:nowrap;border-bottom:2px solid var(--border)">${label} ${active?sortIcon(opsPolSortDir):'<span style="opacity:.2">↕</span>'}</th>`;};
+  const th=(key,label)=>{const active=opsPolSortKey===key;return `<th onclick="opsPolDoSort('${key}')" style="cursor:pointer;user-select:none;white-space:nowrap;${active?'color:var(--blue)':''}" class="cc-th"><div style="display:flex;align-items:center;gap:4px">${label} ${active?sortIcon(opsPolSortDir):'<span style="opacity:.25">↕</span>'}</div></th>`;};
   return `
   ${heading(a('الوثائق','Policies'),'')}
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
@@ -6132,16 +6132,16 @@ function polPoliciesPage(){
         <div style="font-size:13px;font-weight:600;margin-bottom:6px">${a('لا توجد وثائق','No policies')}</div>
         <div style="font-size:12px">${a('ستظهر هنا بعد إصدارها','Policies appear here after issuance')}</div>
       </div>`
-    :`<div style="overflow-x:auto;border:1.5px solid var(--border);border-radius:var(--r)"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
-    <thead><tr style="background:var(--bg)">
+    :`<div class="card"><div class="tw"><table class="cc-table" style="font-size:12.5px">
+    <thead><tr style="background:var(--bg);border-bottom:2px solid var(--border)">
       ${th('policyNumber',a('رقم الوثيقة','Policy No.'))}
       ${th('client',a('العميل','Client'))}
       ${th('insurer',a('شركة التأمين','Insurer'))}
-      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('النوع','Type')}</th>
+      <th>${a('النوع','Type')}</th>
       ${th('premium',a('القسط','Premium'))}
       ${th('policyStart',a('البداية','Start'))}
       ${th('policyEnd',a('النهاية','End'))}
-      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('الحالة','Status')}</th>
+      <th>${a('الحالة','Status')}</th>
     </tr></thead>
     <tbody>
     ${list.map(r=>{
@@ -6169,7 +6169,7 @@ function polPoliciesPage(){
         <td style="padding:12px 14px"><span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span></td>
       </tr>`;
     }).join('')}
-    </tbody></table></div>`}`;
+    </tbody></table></div></div>`}`;
 }
 
 /* ════════════════════════════════════════
