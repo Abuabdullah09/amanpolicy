@@ -1951,7 +1951,7 @@ function opsStatusOwner(id){ return ['sent_client','quote_ready','ready_to_send'
    ════════════════════════════════════════ */
 let notifications = JSON.parse(localStorage.getItem('erp_notifs') || '[]');
 
-function addNotif(targetUser, text, type){
+function addNotif(targetUser, text, type, link){
   if(!targetUser) return;
   type = type || 'info';
   const n = {
@@ -1960,7 +1960,8 @@ function addNotif(targetUser, text, type){
     text: text,
     type: type,
     at: new Date().toLocaleString(lang === 'ar' ? 'ar-SA' : 'en-US', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}),
-    read: false
+    read: false,
+    link: link || null
   };
   // save locally only if the notification is for the current user
   if(curUser && curUser.user === targetUser){
@@ -1971,21 +1972,34 @@ function addNotif(targetUser, text, type){
     if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
   }
   // always insert to Supabase for real-time delivery to the target user
-  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).select('id').single().then(({data:sbRow, error}) => {
-    if(error){ console.warn('notif insert failed', error.message); return; }
-    if(sbRow && curUser && curUser.user === targetUser){
-      const idx = notifications.findIndex(x => x.id === n.id);
-      if(idx >= 0){ notifications[idx].id = sbRow.id; localStorage.setItem('erp_notifs', JSON.stringify(notifications)); }
-    }
-  });
+  const _doInsert = (withLink) => {
+    const sbRow = {to_user: targetUser, text: text, type: type, at: n.at, read: false};
+    if(withLink && link) sbRow.link_data = JSON.stringify(link);
+    sb.from('notifications').insert(sbRow).select('id').single().then(({data:row, error}) => {
+      if(error){
+        if(withLink && link){
+          // link_data column likely missing — retry without it
+          _doInsert(false);
+        } else {
+          console.warn('notif insert failed', error.message);
+        }
+        return;
+      }
+      if(row && curUser && curUser.user === targetUser){
+        const idx = notifications.findIndex(x => x.id === n.id);
+        if(idx >= 0){ notifications[idx].id = row.id; localStorage.setItem('erp_notifs', JSON.stringify(notifications)); }
+      }
+    });
+  };
+  _doInsert(true);
 }
 
-function sendSystemNotification(receiverId, messageText, type){
+function sendSystemNotification(receiverId, messageText, type, link){
   if(!receiverId || !messageText) return;
-  addNotif(receiverId, messageText, type || 'info');
+  addNotif(receiverId, messageText, type || 'info', link || null);
 }
 
-function sendNotifToRole(roleName, deptName, messageText, type){
+function sendNotifToRole(roleName, deptName, messageText, type, link){
   if(!messageText) return;
   const roles = Array.isArray(roleName) ? roleName : (roleName ? [roleName] : []);
   const targets = users.filter(u => {
@@ -1998,7 +2012,7 @@ function sendNotifToRole(roleName, deptName, messageText, type){
   targets.forEach(u => {
     if(u.user && !seen.has(u.user) && (!curUser || u.user !== curUser.user)){
       seen.add(u.user);
-      addNotif(u.user, messageText, type || 'info');
+      addNotif(u.user, messageText, type || 'info', link || null);
     }
   });
 }
@@ -2052,6 +2066,55 @@ function clearAllNotifs(){
   updateNotifBadge();
 }
 
+function notifResolveLink(notif){
+  if(notif.link) return notif.link;
+  // fallback: extract REQ ref from notification text
+  const m = (notif.text||'').match(/REQ-\d{4}-\d+/);
+  if(m){
+    const req = requests.find(r => r.ref === m[0]);
+    if(req) return {type:'request', id: req.id};
+  }
+  return null;
+}
+
+function notifNavigate(notifId){
+  const panel = document.getElementById('notif-panel');
+  if(panel) panel.style.display = 'none';
+  const notif = notifications.find(n => String(n.id) === String(notifId));
+  if(!notif) return;
+  const link = notifResolveLink(notif);
+  if(!link) return;
+  if(!notif.read){
+    notif.read = true;
+    localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+    if(typeof notif.id === 'number')
+      sb.from('notifications').update({read:true}).eq('id', notif.id).then(()=>{});
+    updateNotifBadge();
+  }
+  const nr = normalizeRole(curUser?.role, curUser?.dept);
+  const isOps = ['superadmin','ops_manager','operations'].includes(nr);
+  if(link.type === 'request'){
+    if(isOps){ opsCurrentId = link.id; opsMode = 'view'; opsTab = 'info'; opsNavTab = 'requests'; navigate('operations'); }
+    else { salesCurrentId = link.id; salesMode = 'view'; salesNavTab = 'list'; navigate('sales'); }
+  } else if(link.type === 'policy'){
+    if(isOps){ opsCurrentId = link.id; opsMode = 'view'; opsTab = 'info'; opsNavTab = 'requests'; navigate('operations'); }
+    else { salesCurrentId = link.id; salesMode = 'policy'; salesNavTab = 'policies'; navigate('sales'); }
+  }
+}
+
+function toggleNotifRead(notifId, e){
+  e.stopPropagation();
+  const notif = notifications.find(n => String(n.id) === String(notifId));
+  if(!notif) return;
+  notif.read = !notif.read;
+  localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  if(typeof notif.id === 'number')
+    sb.from('notifications').update({read: notif.read}).eq('id', notif.id).then(()=>{});
+  updateNotifBadge();
+  const panel = document.getElementById('notif-panel');
+  if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
+}
+
 function notifPanelHTML(){
   const list = myNotifs();
   const unread = list.filter(n => !n.read);
@@ -2062,14 +2125,19 @@ function notifPanelHTML(){
     <span style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px;flex-shrink:0">${a('الإشعارات','Notifications')}${unread.length ? `<span style="font-size:11px;font-weight:700;background:var(--blue);color:#fff;border-radius:20px;padding:1px 7px">${unread.length}</span>` : ''}</span>
     ${unread.length ? `<button onclick="markNotifsRead()" style="font-size:11.5px;color:var(--blue);background:none;border:none;cursor:pointer;white-space:nowrap;padding:2px 0;font-weight:600;flex-shrink:0">${a('تحديد الكل كمقروء','Mark all read')}</button>` : ''}
   </div>
-  ${list.length ? list.slice(0,30).map(n => `
-  <div style="padding:10px 14px;border-bottom:1px solid var(--border);background:${n.read ? 'transparent' : 'var(--bg)'};display:flex;gap:10px;align-items:flex-start">
+  ${list.length ? list.slice(0,30).map(n => { const hasLink = !!(n.link || (n.text||'').match(/REQ-\d{4}-\d+/)); return `
+  <div onclick="notifNavigate('${n.id}')" style="padding:10px 14px;border-bottom:1px solid var(--border);background:${n.read ? 'transparent' : 'var(--bg)'};display:flex;gap:10px;align-items:flex-start;${hasLink ? 'cursor:pointer;' : ''}transition:background .15s" onmouseenter="${hasLink ? `this.style.background='var(--blue-light,rgba(59,130,246,.08))'` : ''}" onmouseleave="${hasLink ? `this.style.background='${n.read ? 'transparent' : 'var(--bg)'}'` : ''}">
     <span style="margin-top:2px;font-size:12px;color:${typeColor(n.type)};flex-shrink:0">${typeIcon(n.type)}</span>
     <div style="flex:1;min-width:0">
       <div style="font-size:12.5px;color:var(--text);line-height:1.5">${n.text}</div>
-      <div style="font-size:11px;color:var(--text3);margin-top:3px">${n.at}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px;display:flex;align-items:center;gap:6px">${n.at}${hasLink ? `<span style="font-size:10.5px;color:var(--blue);font-weight:600">${a('← عرض','← View')}</span>` : ''}</div>
     </div>
-  </div>`).join('') : `<div style="padding:28px 16px;text-align:center;font-size:13px;color:var(--text3)">${a('لا توجد إشعارات','No notifications yet')}</div>`}`;
+    <button onclick="toggleNotifRead('${n.id}',event)" title="${n.read ? a('تحديد كغير مقروء','Mark as unread') : a('تحديد كمقروء','Mark as read')}" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:2px 4px;margin-top:1px;opacity:.5;line-height:1" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='.5'">
+      ${n.read
+        ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="var(--text3)" stroke-width="1.5"/></svg>`
+        : `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" fill="var(--blue)"/></svg>`}
+    </button>
+  </div>`; }).join('') : `<div style="padding:28px 16px;text-align:center;font-size:13px;color:var(--text3)">${a('لا توجد إشعارات','No notifications yet')}</div>`}`;
 }
 
 function toggleNotifPanel(e){
@@ -2107,7 +2175,8 @@ function subscribeNotifs(){
       const n = {
         id: r.id, to: r.to_user, text: r.text, type: r.type||'info',
         at: r.at || new Date().toLocaleString(lang==='ar'?'ar-SA':'en-US',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'}),
-        read: false
+        read: false,
+        link: r.link_data ? (() => { try{ return JSON.parse(r.link_data); }catch(e){ return null; } })() : null
       };
       notifications.push(n);
       localStorage.setItem('erp_notifs', JSON.stringify(notifications));
@@ -2646,7 +2715,7 @@ async function afterLogin(user){
   localStorage.removeItem('erp_notifs');
   try {
     const {data:nRows} = await sb.from('notifications').select('*').eq('to_user', curUser.user).order('id', {ascending:false}).limit(50);
-    notifications = (nRows||[]).map(r => ({id: r.id, to: r.to_user, text: r.text, type: r.type||'info', at: r.at||'', read: r.read||false}));
+    notifications = (nRows||[]).map(r => ({id: r.id, to: r.to_user, text: r.text, type: r.type||'info', at: r.at||'', read: r.read||false, link: r.link_data ? (() => { try{ return JSON.parse(r.link_data); }catch(e){ return null; } })() : null}));
     localStorage.setItem('erp_notifs', JSON.stringify(notifications));
     updateNotifBadge();
   } catch(e){
@@ -4800,14 +4869,26 @@ function salesTabContent(r, c){
   }
   if(salesTab === 'docs'){
     const docs = r.docs || [];
-    if(!docs.length){
-      return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">${a('لا توجد مستندات مرفقة','No documents attached')}</div>`;
+    const approvalDocs = r.approvalDocs || [];
+    let html = '';
+    // — مرفقات عروض الأسعار
+    html += docsQuoteAttachmentsHTML(r);
+    // — مستندات إثبات الموافقة
+    if(approvalDocs.length){
+      html += `<div style="margin-bottom:16px">
+        <div style="font-size:11.5px;font-weight:700;color:var(--text3);margin-bottom:8px">${a('مرفقات الاعتماد','Approval Documents')}</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${approvalDocs.map(d => docsAttachItem(d)).join('')}</div>
+      </div>`;
     }
-    return `<div style="display:flex;flex-direction:column;gap:8px">` + docs.map(d => `
-      <div style="display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--border);border-radius:var(--r);background:var(--white)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span style="flex:1;font-size:13px;color:var(--text)">${d.name||d}</span>
-      </div>`).join('') + `</div>`;
+    // — مستندات الطلب العامة
+    if(docs.length){
+      html += `<div style="margin-bottom:16px">
+        <div style="font-size:11.5px;font-weight:700;color:var(--text3);margin-bottom:8px">${a('مستندات الطلب','Request Documents')}</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${docs.map(d => docsAttachItem(d)).join('')}</div>
+      </div>`;
+    }
+    if(!html) return `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:13px">${a('لا توجد مستندات مرفقة','No documents attached')}</div>`;
+    return html;
   }
   return '';
 }
@@ -4907,12 +4988,6 @@ function salesEditSheet(){
       </div>
       <div class="field-row"><span class="field-row-label">${a('تاريخ مطلوب','Required By')}</span>
         <input type="date" id="sl-deadline" dir="ltr" value="${v('deadline')}">
-      </div>
-      <div class="field-row"><span class="field-row-label">${a('المندوب','Agent')}</span>
-        <select id="sl-agent">
-          <option value="">${a('بدون مندوب','No agent')}</option>
-          ${contacts.filter(c=>c.cat==='sales_agent').map(c=>`<option value="${c.id}" ${r&&String(r.agentId)===String(c.id)?'selected':''}>${c.name}</option>`).join('')}
-        </select>
       </div>
     </div>
 
@@ -5417,7 +5492,6 @@ async function salesSave(){
     assignedTo: salesCurrentId ? ((requests.find(x=>x.id===salesCurrentId)||{}).assignedTo || (curUser?curUser.user:'')) : (curUser?curUser.user:''),
     followUp: g('sl-followup') || '',
     deadline: g('sl-deadline') || '',
-    agentId:  g('sl-agent')    || null,
     notes: notesVal,
     docs: cleanDocs,
   };
@@ -5463,7 +5537,7 @@ function salesSendToOps(){
   r.opsStatus = 'inbox';
   addHistory(r, a('مكتمل','Ready'), a('مُرسل للأوبريشن','Sent to Ops'));
   sbSyncReq(salesCurrentId);
-  sendNotifToRole(['superadmin','ops_manager'], null, a('طلب جديد وارد للأوبريشن — الطلب: ','New request arrived in Operations — ref: ') + r.ref + a(' · من: ',' · from: ') + (r.clientName||'—'), 'info');
+  sendNotifToRole(['superadmin','ops_manager'], null, a('طلب جديد وارد للأوبريشن — الطلب: ','New request arrived in Operations — ref: ') + r.ref + a(' · من: ',' · from: ') + (r.clientName||'—'), 'info', {type:'request', id: r.id});
   navigate('sales');
 }
 
@@ -5628,16 +5702,18 @@ function salesRenderApprovalDocs(){
         <button onclick="salesRemoveApprovalDoc(${i})" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
       </div>`).join('');
   }
-  html += `<button class="cc-attach-btn" onclick="salesAddApprovalDoc()">
+  html += `<label class="cc-attach-btn" style="cursor:pointer">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
     ${a('إرفاق مستند','Attach Document')}
-  </button>`;
+    <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" style="display:none" onchange="salesAddApprovalDoc(this)"/>
+  </label>`;
   return html;
 }
-function salesAddApprovalDoc(){
-  const name = prompt(a('اسم المستند أو الملف:','Document / file name:'));
-  if(!name || !name.trim()) return;
-  salesApprovalDocs.push({name: name.trim()});
+function salesAddApprovalDoc(input){
+  const files = Array.from(input?.files||[]);
+  if(!files.length) return;
+  files.forEach(f => salesApprovalDocs.push({name: f.name}));
+  input.value = '';
   document.getElementById('sl-approval-docs').innerHTML = salesRenderApprovalDocs();
 }
 function salesRemoveApprovalDoc(i){
@@ -5679,7 +5755,7 @@ function salesConfirmApproval(){
   r.phase     = 'execution';
   addHistory(r, a('جاهز للإرسال','Ready to Send'), a('معتمد','Approved'), a('موافقة العميل — جاهز للتنفيذ','Client approved — ready for execution'));
   sbSyncReq(salesCurrentId);
-  if(r.handledBy) sendSystemNotification(r.handledBy, a('اعتمد العميل العرض — الطلب: ','Client approved the quote — ref: ') + r.ref + a(' · جاهز للتنفيذ',' · ready for execution'), 'success');
+  if(r.handledBy) sendSystemNotification(r.handledBy, a('اعتمد العميل العرض — الطلب: ','Client approved the quote — ref: ') + r.ref + a(' · جاهز للتنفيذ',' · ready for execution'), 'success', {type:'request', id: r.id});
   closeM('slApproveModal');
   alert(a('تم اعتماد العرض ✓\nانتقل الطلب لمرحلة التنفيذ عند الأوبريشن','Quote approved ✓\nRequest moved to execution phase'));
   navigate('sales');
@@ -5694,7 +5770,7 @@ function salesResubmitToOps(){
   addHistory(r, a('مُرجَّع للمبيعات','Returned to Sales'), opsStatusLabel(prevStatus), a('أُعيد إرساله للأوبريشن','Resubmitted to Operations'));
   r.opsStatus = prevStatus;
   sbSyncReq(salesCurrentId);
-  if(r.handledBy) sendSystemNotification(r.handledBy, a('أُعيد تقديم الطلب بعد المراجعة — الطلب: ','Request resubmitted after review — ref: ') + r.ref, 'info');
+  if(r.handledBy) sendSystemNotification(r.handledBy, a('أُعيد تقديم الطلب بعد المراجعة — الطلب: ','Request resubmitted after review — ref: ') + r.ref, 'info', {type:'request', id: r.id});
   alert(a('تم إعادة الإرسال للأوبريشن ✓','Resubmitted to Operations ✓'));
   navigate('sales');
 }
@@ -5750,7 +5826,7 @@ function salesConfirmReturn(){
   r.opsStatus = 'pricing';
   r.phase = 'quotation';
   sbSyncReq(salesCurrentId);
-  if(r.handledBy) sendSystemNotification(r.handledBy, a('طلب تعديل على التسعيرة — الطلب: ','Revision requested on quote — ref: ') + r.ref + ' · ' + notes, 'warning');
+  if(r.handledBy) sendSystemNotification(r.handledBy, a('طلب تعديل على التسعيرة — الطلب: ','Revision requested on quote — ref: ') + r.ref + ' · ' + notes, 'warning', {type:'request', id: r.id});
   closeM('slReturnModal');
   alert(a('تم إرجاع الطلب للأوبريشن ✓','Returned to Operations ✓'));
   navigate('sales');
@@ -5908,8 +5984,8 @@ function salesSubmitQuoteDecisions(){
   addHistory(r, 'Quotes Submitted', 'Ready to Send to Client');
   r.opsStatus = 'ready_to_send';
   sbSyncReq(salesCurrentId);
-  if(r.assignedTo && r.assignedTo !== curUser?.user) sendSystemNotification(r.assignedTo, 'Quotes selected — ref: ' + r.ref + ' · comparison table ready', 'success');
-  if(r.handledBy && revisionList.length > 0) sendSystemNotification(r.handledBy, 'Some quotes need revision — ref: ' + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
+  if(r.assignedTo && r.assignedTo !== curUser?.user) sendSystemNotification(r.assignedTo, 'Quotes selected — ref: ' + r.ref + ' · comparison table ready', 'success', {type:'request', id: r.id});
+  if(r.handledBy && revisionList.length > 0) sendSystemNotification(r.handledBy, 'Some quotes need revision — ref: ' + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning', {type:'request', id: r.id});
   salesTab = 'quotes';
   renderPage('sales');
 }
@@ -7445,7 +7521,7 @@ function opsAssignHandler(userVal){
     r.opsStatus = 'inbox';
   }
   sbSyncReq(opsCurrentId);
-  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info');
+  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info', {type:'request', id: r.id});
   const lbl = document.querySelector('#ops-handleby-sel');
   if(lbl) lbl.style.borderBottomColor = userVal ? 'var(--success)' : 'var(--border)';
 }
@@ -7463,7 +7539,7 @@ function opsAssignFromList(requestId, userVal){
     r.opsStatus = 'inbox';
   }
   sbSyncReq(requestId);
-  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info');
+  if(userVal) sendSystemNotification(userVal, a('أُسند إليك طلب للمعالجة — الطلب: ','A request has been assigned to you — ref: ') + (r.ref||''), 'info', {type:'request', id: r.id});
   renderReqList();
 }
 
@@ -7749,6 +7825,9 @@ function opsTabContent(r, c){
       </div>`;
     }
 
+    // — مرفقات عروض الأسعار
+    html += docsQuoteAttachmentsHTML(r);
+
     // — المستندات العامة
     if(docs.length){
       html += `<div style="font-size:11.5px;font-weight:600;color:var(--text3);margin-bottom:6px">${a('مستندات الطلب:','Request Documents:')}</div>`;
@@ -7877,7 +7956,7 @@ function opsQuotesTab(r){
       html += `<div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:var(--r)">
         <div style="font-size:11.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('شركات تحتاج تسعيرة','Pending Quotes')}</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
-          ${pending.map(c=>`<button class="btn btn-o btn-sm" onclick="oqPrefillInsurer('${c.name.replace(/'/g,"\\'")}')">+ ${c.name}</button>`).join('')}
+          ${pending.map(c=>`<button class="btn btn-o btn-sm" onclick="oqPrefillInsurer('${c.id}')">+ ${c.name}</button>`).join('')}
         </div>
       </div>`;
     }
@@ -7916,10 +7995,11 @@ function opsQuotesTab(r){
         <div class="field-row full">
           <span class="field-row-label">${a('المرفقات','Attachments')} <span style="font-size:10.5px;color:var(--text3);font-weight:400">${a('(اختياري)','(optional)')}</span></span>
           <div id="oq-attach-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
-          <button type="button" class="cc-attach-btn" onclick="oqAddAttach()">
+          <label class="cc-attach-btn" style="cursor:pointer">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             ${a('إرفاق مستند','Attach Document')}
-          </button>
+            <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" style="display:none" onchange="oqHandleFiles(this)"/>
+          </label>
         </div>
       </div>
       <div class="qm-form-int">
@@ -7957,13 +8037,57 @@ function qmAttachBtn(name){
   </span>`;
 }
 
+function docsAttachItem(d){
+  const name = d.name || d || '';
+  const url  = d.url || (typeof d === 'string' && d.startsWith('http') ? d : null);
+  return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--r);background:var(--white)">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    <span style="flex:1;font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span>
+    ${url ? `<a href="${url}" target="_blank" download style="font-size:11px;color:var(--blue);text-decoration:none;flex-shrink:0">↓ ${a('تحميل','Download')}</a>` : `<span style="font-size:11px;color:var(--text3);flex-shrink:0">${a('اسم فقط','Name only')}</span>`}
+  </div>`;
+}
+
+function docsQuoteAttachmentsHTML(r){
+  const quotes = (r.quotes || []).filter(q => {
+    const atts = [...(q.attachments||[]), ...(q.attachPdf?[{name:q.attachPdf}]:[]), ...(q.attachBenefits?[{name:q.attachBenefits}]:[]), ...(q.attachNetwork?[{name:q.attachNetwork}]:[])];
+    return atts.length > 0;
+  });
+  if(!quotes.length) return '';
+  let html = `<div style="margin-bottom:16px">
+    <div style="font-size:11.5px;font-weight:700;color:var(--text3);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      ${a('مرفقات عروض الأسعار','Quote Attachments')}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">`;
+  quotes.forEach(q => {
+    const atts = [...(q.attachments||[]), ...(q.attachPdf?[{name:q.attachPdf}]:[]), ...(q.attachBenefits?[{name:q.attachBenefits}]:[]), ...(q.attachNetwork?[{name:q.attachNetwork}]:[])];
+    const label = q.insurer || q.quoteNo || a('عرض سعر','Quote');
+    const statusColor = q.status === 'approved' ? '#16a34a' : q.status === 'revision' ? '#b45309' : 'var(--text3)';
+    html += `<div style="border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden">
+      <div style="padding:7px 12px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;font-weight:600;color:var(--text)">${label}</span>
+        ${q.quoteNo ? `<span style="font-size:11px;color:var(--text3)">${q.quoteNo}</span>` : ''}
+        ${q.premium ? `<span style="font-size:11px;color:var(--text3);margin-inline-start:auto">${Number(q.premium).toLocaleString()} ${a('ر.س','SAR')}</span>` : ''}
+      </div>
+      <div style="padding:8px 10px;display:flex;flex-direction:column;gap:5px">
+        ${atts.map(d => docsAttachItem(d)).join('')}
+      </div>
+    </div>`;
+  });
+  html += `</div></div>`;
+  return html;
+}
+
 let oqTmpAttachments = [];
 let opsEditQuoteIdx = null;
 
 function oqAddAttach(){
-  const name = prompt(a('اسم المستند أو الملف:','Document / file name:'));
-  if(!name || !name.trim()) return;
-  oqTmpAttachments.push({name: name.trim()});
+  document.getElementById('oq-file-input')?.click();
+}
+function oqHandleFiles(input){
+  const files = Array.from(input.files||[]);
+  files.forEach(f => oqTmpAttachments.push({name: f.name}));
+  input.value = '';
   oqRenderAttachList();
 }
 
@@ -7982,11 +8106,11 @@ function oqRenderAttachList(){
       <button onclick="oqRemoveAttach(${i})" style="border:none;background:transparent;color:var(--text3);cursor:pointer;padding:0;flex-shrink:0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
     </div>`).join('');
 }
-function oqPrefillInsurer(name){
+function oqPrefillInsurer(insurerId){
   const sel = document.getElementById('oq-insurer');
   if(sel){
     for(let i = 0; i < sel.options.length; i++){
-      if(sel.options[i].value === name){ sel.selectedIndex = i; break; }
+      if(sel.options[i].value === String(insurerId)){ sel.selectedIndex = i; break; }
     }
   }
   // إذا كان في وضع تعديل عرض — اخرج منه
@@ -8143,7 +8267,7 @@ function opsSendQuotesToSales(){
   r.quotes.forEach(q => { if(q.status === 'revision') q.status = 'pending'; q.sentAt = sentAt; });
   addHistory(r, prevStatus, a('عروض مُرسلة للمندوب','Quotes Submitted to Sales'));
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('تم إرسال عروض الأسعار للمراجعة — الطلب: ','Quotes sent for your review — ref: ') + r.ref + a(' · يرجى المراجعة والاعتماد',' · please review and approve'), 'info');
+  sendSystemNotification(r.assignedTo, a('تم إرسال عروض الأسعار للمراجعة — الطلب: ','Quotes sent for your review — ref: ') + r.ref + a(' · يرجى المراجعة والاعتماد',' · please review and approve'), 'info', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsResubmitQuotes(){
@@ -8158,7 +8282,7 @@ function opsResubmitQuotes(){
   const sentAt2 = new Date().toISOString().slice(0,10);
   r.quotes.forEach(q => { if(q.status === 'revision') q.status = 'pending'; q.sentAt = sentAt2; });
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('تمت مراجعة وتعديل العروض — الطلب: ','Quotes revised and resubmitted — ref: ') + r.ref + a(' · يرجى إعادة المراجعة',' · please review again'), 'info');
+  sendSystemNotification(r.assignedTo, a('تمت مراجعة وتعديل العروض — الطلب: ','Quotes revised and resubmitted — ref: ') + r.ref + a(' · يرجى إعادة المراجعة',' · please review again'), 'info', {type:'request', id: r.id});
   navigate('operations');
 }
 
@@ -8169,7 +8293,7 @@ function opsConfirmReceipt(){
   addHistory(r, a('وارد ومُكلَّف','Received & Assigned'), a('قيد المعالجة','Processing'));
   r.opsStatus = 'processing';
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('بدأ معالجة طلبك — الطلب: ','Your request is now being processed — ref: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('بدأ معالجة طلبك — الطلب: ','Your request is now being processed — ref: ') + r.ref, 'info', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsMarkQuoteReady(){
@@ -8179,7 +8303,7 @@ function opsMarkQuoteReady(){
   addHistory(r, a('قيد المعالجة','Processing'), a('التسعيرة جاهزة','Quote Ready'));
   r.opsStatus = 'quote_ready';
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('التسعيرة جاهزة للمراجعة — الطلب: ','Quote ready for your review — request: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('التسعيرة جاهزة للمراجعة — الطلب: ','Quote ready for your review — request: ') + r.ref, 'info', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsStartPricing(){
@@ -8188,7 +8312,7 @@ function opsStartPricing(){
   addHistory(r, opsStatusLabel(r.opsStatus||'inbox'), a('قيد التسعير','Pricing'));
   r.opsStatus = 'pricing';
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('بدأ تسعير طلبك — الطلب: ','Pricing has started for your request — ref: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('بدأ تسعير طلبك — الطلب: ','Pricing has started for your request — ref: ') + r.ref, 'info', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsSendToClient(){
@@ -8200,7 +8324,7 @@ function opsSendToClient(){
   r.opsStatus = 'sent_client';
   r.phase = 'quotation';
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('تم إرسال العرض للعميل — الطلب: ','Quote sent to client — request: ') + r.ref + a(' · يرجى المتابعة مع العميل',' · please follow up with client'), 'success');
+  sendSystemNotification(r.assignedTo, a('تم إرسال العرض للعميل — الطلب: ','Quote sent to client — request: ') + r.ref + a(' · يرجى المتابعة مع العميل',' · please follow up with client'), 'success', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsStartExecution(){
@@ -8221,7 +8345,7 @@ function opsStartExecution(){
     r.execution.commissionAmt  = r.execution.commissionAmt  || winnerQuote.commissionAmt || '';
   }
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('انتقل طلبك لمرحلة التنفيذ — الطلب: ','Your request moved to execution phase — ref: ') + r.ref, 'info');
+  sendSystemNotification(r.assignedTo, a('انتقل طلبك لمرحلة التنفيذ — الطلب: ','Your request moved to execution phase — ref: ') + r.ref, 'info', {type:'request', id: r.id});
   opsTab = 'execution';
   navigate('operations');
 }
@@ -8256,7 +8380,7 @@ async function opsIssuePolicy(){
     issuedAt:      ex.issuedAt,
     issuedBy:      curUser?.user || '',
   });
-  sendSystemNotification(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success');
+  sendSystemNotification(r.assignedTo, a('صدرت الوثيقة — الطلب: ','Policy has been issued — request: ') + r.ref, 'success', {type:'request', id: r.id});
   navigate('operations');
 }
 function opsMarkDone(){
@@ -8284,7 +8408,7 @@ function opsMarkDone(){
       ]
     });
   }
-  sendSystemNotification(r.assignedTo, a('اكتمل طلبك — الوثيقة أُرسلت للمبيعات: ','Your request is complete — policy sent to sales: ') + r.ref, 'success');
+  sendSystemNotification(r.assignedTo, a('اكتمل طلبك — الوثيقة أُرسلت للمبيعات: ','Your request is complete — policy sent to sales: ') + r.ref, 'success', {type:'request', id: r.id});
   navigate('operations');
 }
 
@@ -8447,7 +8571,7 @@ function opsConfirmReject(){
   if(!r.revisions) r.revisions = [];
   r.revisions.push({ reason: 'rejected', notes: reason, by: curUser?.name||'—', at: new Date().toISOString().slice(0,10) });
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('رُفض طلبك وأُعيد للمبيعات — الطلب: ','Your request was rejected and returned to Sales — ref: ') + r.ref + ' · ' + a('السبب: ','Reason: ') + reason, 'warning');
+  sendSystemNotification(r.assignedTo, a('رُفض طلبك وأُعيد للمبيعات — الطلب: ','Your request was rejected and returned to Sales — ref: ') + r.ref + ' · ' + a('السبب: ','Reason: ') + reason, 'warning', {type:'request', id: r.id});
   closeM('opsRejectModal');
   alert(a('تم رفض الطلب وإرجاعه للمبيعات ✓','Request rejected and returned to Sales ✓'));
   opsMode = 'list'; opsCurrentId = null;
@@ -8477,7 +8601,7 @@ function opsConfirmReturnToSales(){
   addHistory(r, opsStatusLabel(r.opsStatus||'inbox'), a('مُرجَّع للمبيعات','Returned to Sales'), a('السبب: ','Reason: ') + reason);
   r.opsStatus = 'returned_to_sales';
   sbSyncReq(opsCurrentId);
-  sendSystemNotification(r.assignedTo, a('تم إرجاع طلبك من الأوبريشن — الطلب: ','Your request was returned by Operations — ref: ') + r.ref + ' · ' + a('السبب: ','Reason: ') + reason, 'warning');
+  sendSystemNotification(r.assignedTo, a('تم إرجاع طلبك من الأوبريشن — الطلب: ','Your request was returned by Operations — ref: ') + r.ref + ' · ' + a('السبب: ','Reason: ') + reason, 'warning', {type:'request', id: r.id});
   closeM('opsReturnToSalesModal');
   navigate('operations');
 }
@@ -16003,10 +16127,11 @@ function custReqPickPolicy(reqId){
   const c = contacts.find(x => String(x.id) === custReqPickedContact);
   if(prev && c) prev.innerHTML = custReqClientPreview(c);
 }
-function custReqAddDoc(){
-  const name = prompt(a('اسم المستند:','Document name:'));
-  if(!name || !name.trim()) return;
-  custReqFormDocs.push({name: name.trim()});
+function custReqAddDoc(input){
+  const files = Array.from(input?.files||[]);
+  if(!files.length) return;
+  files.forEach(f => custReqFormDocs.push({name: f.name}));
+  input.value = '';
   const list = document.getElementById('csr-docs-list');
   if(list) list.innerHTML = custReqDocsHTML();
 }
@@ -16031,7 +16156,11 @@ function custReqTabContent(){
     return `<textarea class="fta" id="csr-notes" style="width:100%;min-height:100px" placeholder="${a('ملاحظات الطلب...','Request notes...')}">${custReqTmpNotes}</textarea>`;
   }
   return `<div id="csr-docs-list">${custReqDocsHTML()}</div>
-    <button class="btn btn-o btn-sm" style="margin-top:10px" onclick="custReqAddDoc()">+ ${a('إضافة مستند','Add Document')}</button>`;
+    <label class="cc-attach-btn" style="cursor:pointer;margin-top:10px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      ${a('إرفاق مستند','Attach Document')}
+      <input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" style="display:none" onchange="custReqAddDoc(this)"/>
+    </label>`;
 }
 function custReqFormSheet(){
   const t = custReqFormTicketId ? csTickets.find(x => String(x.id) === String(custReqFormTicketId)) : null;
