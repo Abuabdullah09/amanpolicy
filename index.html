@@ -1962,20 +1962,22 @@ function addNotif(targetUser, text, type){
     at: new Date().toLocaleString(lang === 'ar' ? 'ar-SA' : 'en-US', {hour:'2-digit', minute:'2-digit', day:'numeric', month:'short'}),
     read: false
   };
-  notifications.push(n);
-  localStorage.setItem('erp_notifs', JSON.stringify(notifications));
-  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).select('id').single().then(({data:sbRow, error}) => {
-    if(error){ console.warn('notif insert failed', error.message); return; }
-    if(sbRow){
-      const idx = notifications.findIndex(x => x.id === n.id);
-      if(idx >= 0){ notifications[idx].id = sbRow.id; localStorage.setItem('erp_notifs', JSON.stringify(notifications)); }
-    }
-  });
+  // save locally only if the notification is for the current user
   if(curUser && curUser.user === targetUser){
+    notifications.push(n);
+    localStorage.setItem('erp_notifs', JSON.stringify(notifications));
     updateNotifBadge();
     const panel = document.getElementById('notif-panel');
     if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
   }
+  // always insert to Supabase for real-time delivery to the target user
+  sb.from('notifications').insert({to_user: targetUser, text: text, type: type, at: n.at, read: false}).select('id').single().then(({data:sbRow, error}) => {
+    if(error){ console.warn('notif insert failed', error.message); return; }
+    if(sbRow && curUser && curUser.user === targetUser){
+      const idx = notifications.findIndex(x => x.id === n.id);
+      if(idx >= 0){ notifications[idx].id = sbRow.id; localStorage.setItem('erp_notifs', JSON.stringify(notifications)); }
+    }
+  });
 }
 
 function sendSystemNotification(receiverId, messageText, type){
@@ -1985,8 +1987,10 @@ function sendSystemNotification(receiverId, messageText, type){
 
 function sendNotifToRole(roleName, deptName, messageText, type){
   if(!messageText) return;
+  const roles = Array.isArray(roleName) ? roleName : (roleName ? [roleName] : []);
   const targets = users.filter(u => {
-    if(roleName && u.role === roleName) return true;
+    const nr = normalizeRole(u.role, u.dept);
+    if(roles.length && roles.includes(nr)) return true;
     if(deptName && u.dept === deptName) return true;
     return false;
   });
@@ -2004,6 +2008,11 @@ function myNotifs(){
 }
 
 function updateNotifBadge(){
+  if(curUser){
+    const before = notifications.length;
+    notifications = notifications.filter(n => n.to === curUser.user);
+    if(notifications.length !== before) localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  }
   const dot = document.querySelector('#notifBtn .ndot');
   if(dot) dot.style.display = myNotifs().some(n => !n.read) ? 'block' : 'none';
 }
@@ -2028,15 +2037,30 @@ function markNotifsRead(){
   updateNotifBadge();
 }
 
+function clearAllNotifs(){
+  if(!curUser) return;
+  const sbIds = notifications.filter(n => n.to === curUser.user && typeof n.id === 'number').map(n => n.id);
+  notifications = notifications.filter(n => n.to !== curUser.user);
+  localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+  if(sbIds.length){
+    sb.from('notifications').delete().in('id', sbIds).then(({error}) => {
+      if(error) console.warn('clearNotifs failed', error.message);
+    });
+  }
+  const panel = document.getElementById('notif-panel');
+  if(panel && panel.style.display === 'block') panel.innerHTML = notifPanelHTML();
+  updateNotifBadge();
+}
+
 function notifPanelHTML(){
   const list = myNotifs();
   const unread = list.filter(n => !n.read);
   const typeIcon = t => t === 'success' ? '✓' : t === 'warning' ? '⚠' : t === 'error' ? '✕' : '●';
   const typeColor = t => t === 'success' ? '#1e7a52' : t === 'warning' ? '#b8740f' : t === 'error' ? '#ef4444' : 'var(--blue)';
   return `
-  <div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <span style="font-size:13px;font-weight:700;color:var(--text)">${a('الإشعارات','Notifications')}${unread.length ? ` <span style="font-size:11px;font-weight:600;background:var(--blue);color:#fff;border-radius:20px;padding:1px 6px">${unread.length}</span>` : ''}</span>
-    ${unread.length ? `<button onclick="markNotifsRead()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;white-space:nowrap;padding:2px 0">${a('تحديد كمقروء','Mark all read')}</button>` : ''}
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0">
+    <span style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px;flex-shrink:0">${a('الإشعارات','Notifications')}${unread.length ? `<span style="font-size:11px;font-weight:700;background:var(--blue);color:#fff;border-radius:20px;padding:1px 7px">${unread.length}</span>` : ''}</span>
+    ${unread.length ? `<button onclick="markNotifsRead()" style="font-size:11.5px;color:var(--blue);background:none;border:none;cursor:pointer;white-space:nowrap;padding:2px 0;font-weight:600;flex-shrink:0">${a('تحديد الكل كمقروء','Mark all read')}</button>` : ''}
   </div>
   ${list.length ? list.slice(0,30).map(n => `
   <div style="padding:10px 14px;border-bottom:1px solid var(--border);background:${n.read ? 'transparent' : 'var(--bg)'};display:flex;gap:10px;align-items:flex-start">
@@ -2055,10 +2079,17 @@ function toggleNotifPanel(e){
   if(panel.style.display === 'block'){ panel.style.display = 'none'; return; }
   panel.innerHTML = notifPanelHTML();
   const rect = e.currentTarget.getBoundingClientRect();
-  const pw = 300;
-  panel.style.top = (rect.bottom + 6) + 'px';
-  if(rect.right - pw >= 8){ panel.style.left = (rect.right - pw) + 'px'; panel.style.right = 'auto'; }
-  else { panel.style.right = '8px'; panel.style.left = 'auto'; }
+  const pw = 360;
+  const top = rect.bottom + 6;
+  const maxH = 480;
+  // ensure panel doesn't go below viewport
+  panel.style.maxHeight = Math.min(maxH, window.innerHeight - top - 8) + 'px';
+  panel.style.top = top + 'px';
+  // align right edge to bell icon, but keep within viewport
+  const rightEdge = Math.min(rect.right, window.innerWidth - 8);
+  const leftPos = rightEdge - pw;
+  if(leftPos >= 8){ panel.style.left = leftPos + 'px'; panel.style.right = 'auto'; }
+  else { panel.style.left = '8px'; panel.style.right = 'auto'; }
   panel.style.display = 'block';
 }
 
@@ -2610,10 +2641,14 @@ async function afterLogin(user){
   const _savedPage = localStorage.getItem('aman_curPage');
   if(_savedPage && _savedPage !== 'hub' && canAccess(_savedPage)) navigate(_savedPage);
   else goHub();
+  // clear any leftover notifications from a previous user session
+  notifications = [];
+  localStorage.removeItem('erp_notifs');
   try {
     const {data:nRows} = await sb.from('notifications').select('*').eq('to_user', curUser.user).order('id', {ascending:false}).limit(50);
     notifications = (nRows||[]).map(r => ({id: r.id, to: r.to_user, text: r.text, type: r.type||'info', at: r.at||'', read: r.read||false}));
     localStorage.setItem('erp_notifs', JSON.stringify(notifications));
+    updateNotifBadge();
   } catch(e){
     console.warn('notifs load failed', e);
     notifications = [];
@@ -3282,7 +3317,7 @@ function dashSales(){
         const e=r.execution?.policyEnd||'';
         const d=Math.ceil((new Date(e)-new Date(today))/86400000);
         const dot=d<=7?'#dc2626':'#d97706';
-        return `<div class="task-row" style="cursor:pointer" onclick="salesNavGo('policies');setTimeout(()=>salesOpenPolicy('${r.id}'),50)">
+        return `<div class="task-row" style="cursor:pointer" onclick="salesNavGo('policies');setTimeout(()=>polOpen('${r.id}'),50)">
           <span class="task-dot" style="background:${dot}"></span>
           <span class="task-label">${salesClientName(r)||r.ref} — ${insTypeLabel(r.insType)||'—'}</span>
           <span class="task-meta" dir="ltr">${e} <span style="color:${dot};font-weight:700">(${d}d)</span></span>
@@ -3775,6 +3810,7 @@ function salesSetTab(id){
 
 function salesNavGo(tab){
   salesNavTab = tab; salesMode = 'list'; salDashFilter = null; salesCurrentId = null;
+  opsMode = 'list';
   navigate('sales');
 }
 
@@ -3785,16 +3821,21 @@ function updateSubnav(context){
     `<button class="snav-item${isActive?' active':''}" onclick="${fn}">${label}</button>`;
   if(context === 'crm'){
     nav.style.display = 'flex';
-    if(crmTab === 'sales'){
+    if(isMgr()){
       nav.innerHTML =
-        btn('sdash', a('لوحة التحكم','Dashboard'), "salesNavGo('dashboard')", salesNavTab==='dashboard') +
-        btn('slist', a('الطلبات','Requests'), "salesNavGo('list')", salesNavTab==='list') +
-        btn('spol',  a('الوثائق','Policies'),  "salesNavGo('policies')",  salesNavTab==='policies');
-    } else {
+        btn('mdash', a('لوحة التحكم','Dashboard'), "salesNavGo('dashboard')", salesNavTab==='dashboard') +
+        btn('mreq',  a('الطلبات','Requests'),       "salesNavGo('list')",      salesNavTab==='list') +
+        btn('mpol',  a('الوثائق','Policies'),        "salesNavGo('policies')",  salesNavTab==='policies');
+    } else if(isOpsEmp()){
       nav.innerHTML =
         btn('odash', a('لوحة التحكم','Dashboard'), "opsNavGo('dashboard')", opsNavTab==='dashboard') +
         btn('oreq',  a('الطلبات','Requests'),       "opsNavGo('requests')",  opsNavTab==='requests') +
         btn('opol',  a('الوثائق','Policies'),        "opsNavGo('policies')",  opsNavTab==='policies');
+    } else {
+      nav.innerHTML =
+        btn('sdash', a('لوحة التحكم','Dashboard'), "salesNavGo('dashboard')", salesNavTab==='dashboard') +
+        btn('slist', a('الطلبات','Requests'),       "salesNavGo('list')",      salesNavTab==='list') +
+        btn('spol',  a('الوثائق','Policies'),        "salesNavGo('policies')",  salesNavTab==='policies');
     }
   } else if(context === 'sales'){
     nav.style.display = 'flex';
@@ -3814,6 +3855,12 @@ function updateSubnav(context){
       btn('dashboard', a('لوحة التحكم','Dashboard'), "custNavGo('dashboard')", custNavTab==='dashboard') +
       btn('requests',  a('الطلبات','Requests'),       "custNavGo('requests')",  custNavTab==='requests') +
       btn('policies',  a('الوثائق','Policies'),        "custNavGo('policies')",  custNavTab==='policies');
+  } else if(context === 'settings'){
+    nav.style.display = 'flex';
+    nav.innerHTML =
+      btn('stco',  a('بيانات الشركة','Company'),   "stSetTab('company')", stTab==='company') +
+      btn('stusr', a('المستخدمون','Users'),          "stSetTab('users')",   stTab==='users') +
+      btn('stap',  a('المظهر','Appearance'),         "stSetTab('appear')",  stTab==='appear');
   } else {
     nav.style.display = 'none';
     nav.innerHTML = '';
@@ -3830,9 +3877,8 @@ function updateSubnav(context){
 function pgSales(){
   if(salesMode === 'view')   return salesViewSheet();
   if(salesMode === 'edit')   return salesEditSheet();
-  if(salesMode === 'policy') return salesPolicySheet();
   if(salesNavTab === 'dashboard') return dashSales();
-  if(salesNavTab === 'policies')  return salesPoliciesPage();
+  if(salesNavTab === 'policies')  return opsPolMode==='view' ? polPolicyDetailPage() : polPoliciesPage();
   return salesListPage();
 }
 function renderPipe(){ if(salesMode === 'list') renderReqList(); }
@@ -5417,8 +5463,7 @@ function salesSendToOps(){
   r.opsStatus = 'inbox';
   addHistory(r, a('مكتمل','Ready'), a('مُرسل للأوبريشن','Sent to Ops'));
   sbSyncReq(salesCurrentId);
-  sendSystemNotification(r.assignedTo, a('تم إرسال طلبك للأوبريشن — الطلب: ','Your request was sent to Operations — ref: ') + r.ref, 'info');
-  sendNotifToRole('superadmin', 'operations', a('طلب جديد وارد للأوبريشن — الطلب: ','New request arrived in Operations — ref: ') + r.ref + a(' · من: ',' · from: ') + (r.clientName||'—'), 'info');
+  sendNotifToRole(['superadmin','ops_manager'], null, a('طلب جديد وارد للأوبريشن — الطلب: ','New request arrived in Operations — ref: ') + r.ref + a(' · من: ',' · from: ') + (r.clientName||'—'), 'info');
   navigate('sales');
 }
 
@@ -5863,7 +5908,7 @@ function salesSubmitQuoteDecisions(){
   addHistory(r, 'Quotes Submitted', 'Ready to Send to Client');
   r.opsStatus = 'ready_to_send';
   sbSyncReq(salesCurrentId);
-  sendSystemNotification(r.assignedTo, 'Quotes selected — ref: ' + r.ref + ' · comparison table ready', 'success');
+  if(r.assignedTo && r.assignedTo !== curUser?.user) sendSystemNotification(r.assignedTo, 'Quotes selected — ref: ' + r.ref + ' · comparison table ready', 'success');
   if(r.handledBy && revisionList.length > 0) sendSystemNotification(r.handledBy, 'Some quotes need revision — ref: ' + r.ref + ' · ' + revisionList.map(q=>q.insurer||'—').join(', '), 'warning');
   salesTab = 'quotes';
   renderPage('sales');
@@ -6003,7 +6048,7 @@ function salesPoliciesPage(){
           const isExpiringSoon = ex.policyEnd && ex.policyEnd >= today &&
             Math.ceil((new Date(ex.policyEnd) - new Date(today)) / 86400000) <= 30;
           const isExpired = ex.policyEnd && ex.policyEnd < today;
-          return `<tr style="cursor:pointer" onclick="salesOpenPolicy('${r.id}')">
+          return `<tr style="cursor:pointer" onclick="polOpen('${r.id}')">
             <td>
               ${ex.policyNumber
                 ? `<span style="font-family:'Inter',sans-serif;font-weight:800;color:var(--blue);font-size:13px">${ex.policyNumber}</span>`
@@ -6036,11 +6081,256 @@ function polToggleSort(key){
 }
 
 /* ════════════════════════════════════════
-   عرض البوليصة — Policy Detail View
+   الوثائق — صفحة موحّدة
+   ════════════════════════════════════════ */
+function polOpen(id){
+  opsPolCurrentId = id; opsPolMode = 'view';
+  if(isSalesEmp()) opsNavTab = 'policies';
+  const c = document.getElementById('appContent');
+  if(c){ c.innerHTML = pgCRM(); setTimeout(initCRM, 0); }
+}
+
+function polPoliciesPage(){
+  const today=new Date().toISOString().slice(0,10);
+  const q=opsPolQ.toLowerCase().trim();
+  const isSales=isSalesEmp(), isOps=isOpsEmp();
+  let list=requests.filter(r=>{
+    if(!r.execution?.policyNumber) return false;
+    if(r.status==='lost') return false;
+    if(isSales) return r.assignedTo===curUser?.user;
+    if(isOps)   return r.handledBy===curUser?.user;
+    return true;
+  });
+  if(q) list=list.filter(r=>{
+    const ex=r.execution||{};
+    return [ex.policyNumber,salesClientName(r),r.ref,ex.insurer,r.assignedTo].join(' ').toLowerCase().includes(q);
+  });
+  list.sort((a,b)=>{
+    const ea=a.execution||{},eb=b.execution||{};
+    if(opsPolSortKey==='premium') return opsPolSortDir==='desc'?(parseFloat(eb.finalPremium)||0)-(parseFloat(ea.finalPremium)||0):(parseFloat(ea.finalPremium)||0)-(parseFloat(eb.finalPremium)||0);
+    const map={policyNumber:'policyNumber',client:null,insurer:'insurer',policyStart:'policyStart',policyEnd:'policyEnd'};
+    const va=opsPolSortKey==='client'?salesClientName(a)||'':ea[map[opsPolSortKey]]||'';
+    const vb=opsPolSortKey==='client'?salesClientName(b)||'':eb[map[opsPolSortKey]]||'';
+    return opsPolSortDir==='desc'?vb.localeCompare(va):va.localeCompare(vb);
+  });
+  const sortIcon=d=>d==='desc'
+    ?`<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`
+    :`<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+  const th=(key,label)=>{const active=opsPolSortKey===key;return `<th onclick="opsPolDoSort('${key}')" style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:${active?'var(--blue)':'var(--text2)'};cursor:pointer;user-select:none;white-space:nowrap;border-bottom:2px solid var(--border)">${label} ${active?sortIcon(opsPolSortDir):'<span style="opacity:.2">↕</span>'}</th>`;};
+  return `
+  ${heading(a('الوثائق','Policies'),'')}
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+    <div class="srch-wr" style="flex:1;max-width:380px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="text" value="${opsPolQ}" placeholder="${a('بحث برقم الوثيقة أو العميل...','Search by policy no. or client...')}" oninput="opsPolQ=this.value;const c=document.getElementById('appContent');if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);}" style="border:none;background:transparent;outline:none;font-family:var(--font);font-size:13px;color:var(--text);flex:1"/>
+    </div>
+    <span style="font-size:12px;color:var(--text3)">${list.length} ${a('وثيقة','policies')}</span>
+  </div>
+  ${list.length===0
+    ?`<div style="text-align:center;padding:60px 20px;color:var(--text3)">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="opacity:.35;margin-bottom:12px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">${a('لا توجد وثائق','No policies')}</div>
+        <div style="font-size:12px">${a('ستظهر هنا بعد إصدارها','Policies appear here after issuance')}</div>
+      </div>`
+    :`<div style="overflow-x:auto;border:1.5px solid var(--border);border-radius:var(--r)"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <thead><tr style="background:var(--bg)">
+      ${th('policyNumber',a('رقم الوثيقة','Policy No.'))}
+      ${th('client',a('العميل','Client'))}
+      ${th('insurer',a('شركة التأمين','Insurer'))}
+      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('النوع','Type')}</th>
+      ${th('premium',a('القسط','Premium'))}
+      ${th('policyStart',a('البداية','Start'))}
+      ${th('policyEnd',a('النهاية','End'))}
+      <th style="padding:10px 14px;text-align:start;font-size:11.5px;font-weight:700;color:var(--text2);border-bottom:2px solid var(--border)">${a('الحالة','Status')}</th>
+    </tr></thead>
+    <tbody>
+    ${list.map(r=>{
+      const ex=r.execution||{};
+      const polEnd=ex.policyEnd||'';
+      const isExpiredDate=polEnd&&polEnd<today;
+      const isSoon=!isExpiredDate&&polEnd&&polEnd<=new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+      const effStatus=ex.policyStatus==='cancelled'?'cancelled':isExpiredDate&&ex.policyStatus==='active'?'expired':ex.policyStatus||'active';
+      const ps=polStatusDef(effStatus);
+      const salesRepName=(()=>{const u=users.find(x=>x.user===r.assignedTo);return u?(lang==='ar'?u.name:u.nEn):(r.assignedTo||'—');})();
+      return `<tr onclick="polOpen('${r.id}')" style="border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+        <td style="padding:12px 14px">
+          <div style="font-family:'Inter',sans-serif;font-size:14px;font-weight:900;color:var(--blue)">${ex.policyNumber}</div>
+          <div style="font-size:10.5px;color:var(--text3);margin-top:2px">${a('مرجع:','Ref:')} ${r.ref}</div>
+        </td>
+        <td style="padding:12px 14px">
+          <div style="font-weight:600;color:var(--text)">${salesClientName(r)||'—'}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:1px">${salesRepName}</div>
+        </td>
+        <td style="padding:12px 14px;color:var(--text2)">${ex.insurer||'—'}</td>
+        <td style="padding:12px 14px">${badge('bg-gray',insTypeLabel(r.insType)||'—')}</td>
+        <td style="padding:12px 14px;font-weight:700;color:var(--text)" dir="ltr">${ex.finalPremium?fmtMoney(parseFloat(ex.finalPremium)):'—'}</td>
+        <td style="padding:12px 14px;font-family:'Inter',sans-serif;color:var(--text)" dir="ltr">${ex.policyStart||'—'}</td>
+        <td style="padding:12px 14px;font-family:'Inter',sans-serif;color:${isSoon?'#b45309':isExpiredDate?'#dc2626':'var(--text)'};font-weight:${isSoon||isExpiredDate?'700':'400'}" dir="ltr">${polEnd||'—'}</td>
+        <td style="padding:12px 14px"><span style="font-size:11.5px;padding:3px 10px;border-radius:99px;font-weight:600;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span></td>
+      </tr>`;
+    }).join('')}
+    </tbody></table></div>`}`;
+}
+
+/* ════════════════════════════════════════
+   عرض البوليصة الموحّد — Unified Policy Detail
+   ════════════════════════════════════════ */
+function polPolicyDetailPage(){
+  const r = requests.find(x=>String(x.id)===String(opsPolCurrentId));
+  if(!r){ opsPolMode='list'; return polPoliciesPage(); }
+  const ex=r.execution||{};
+  const clientName=salesClientName(r)||r.clientName||'—';
+  const ct=r.contactId?contacts.find(x=>String(x.id)===String(r.contactId)):null;
+  const today=new Date().toISOString().slice(0,10);
+  const polEnd=ex.policyEnd||'';
+  const isExpiredDate=polEnd&&polEnd<today;
+  const effStatus=ex.policyStatus==='cancelled'?'cancelled':isExpiredDate&&ex.policyStatus==='active'?'expired':ex.policyStatus||'active';
+  const ps=polStatusDef(effStatus);
+  const inst=r.installments||[];
+  const paidAmt=inst.filter(x=>x.status==='paid').reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const totalAmt=inst.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  const showComm=!isOpsEmp();
+  const payMethodLabel={full:a('دفعة كاملة','Full Payment'),quarterly:a('ربع سنوية','Quarterly'),semi:a('نصف سنوية','Semi-Annual'),custom:a('مخصصة','Custom')}[ex.paymentMethod]||'—';
+  return `
+  <div class="sheet-bar">
+    <div class="sheet-bar-l">
+      <button class="btn btn-o btn-sm" onclick="opsPolBack()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transform:${lang==='ar'?'scaleX(-1)':'none'}"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        ${a('رجوع للوثائق','Back to Policies')}
+      </button>
+    </div>
+    <div class="sheet-bar-r" style="gap:8px">
+      <span style="font-size:11.5px;padding:4px 12px;border-radius:99px;font-weight:700;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span>
+      <button disabled title="${a('متاح قريباً لخدمة العملاء','Coming soon — CS role')}" style="padding:5px 12px;border:1.5px dashed var(--border);background:var(--bg);color:var(--text3);border-radius:8px;font-size:12px;font-weight:600;cursor:not-allowed;opacity:.6">
+        + ${a('ملحق تعديل','Endorsement')}
+      </button>
+      <button disabled title="${a('متاح قريباً','Coming soon')}" style="padding:5px 12px;border:1.5px dashed #fca5a5;background:#fff5f5;color:#fca5a5;border-radius:8px;font-size:12px;font-weight:600;cursor:not-allowed;opacity:.6">
+        ✕ ${a('إلغاء الوثيقة','Cancel Policy')}
+      </button>
+    </div>
+  </div>
+  <div class="sheet">
+    <div class="sheet-head">
+      <div class="sheet-photo" style="background:var(--blue)">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.6"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="sheet-head-main">
+        <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">${a('وثيقة تأمين','Insurance Policy')}</div>
+        <div style="font-size:28px;font-weight:900;color:var(--text);font-family:'Inter',sans-serif;letter-spacing:.01em">${ex.policyNumber||a('بدون رقم','No Number')}</div>
+        <div style="font-size:13.5px;color:var(--text2);margin-top:6px;font-weight:500">${clientName}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">${ex.insurer||''} · ${insTypeLabel(r.insType)||''}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:18px">
+      ${[
+        [a('شركة التأمين','Insurer'), ex.insurer||'—'],
+        [a('نوع التأمين','Type'), insTypeLabel(r.insType)||'—'],
+        [a('القسط الإجمالي (بدون ضريبة)','Total Premium (excl. VAT)'), ex.finalPremium?fmtMoney(parseFloat(ex.finalPremium)):'—'],
+        [a('طريقة الدفع','Payment Method'), payMethodLabel],
+        [a('بداية التغطية','Coverage Start'), ex.policyStart||'—'],
+        [a('نهاية التغطية','Coverage End'), ex.policyEnd||'—'],
+        [a('تاريخ الإصدار','Issued On'), ex.issuedAt||'—'],
+        [a('حالة الوثيقة','Policy Status'), `<span style="font-size:11.5px;padding:2px 9px;border-radius:99px;font-weight:700;background:${ps.bg};color:${ps.color}">${lang==='ar'?ps.ar:ps.en}</span>`],
+      ].map(([lbl,val])=>`
+      <div style="padding:12px 14px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r)">
+        <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${lbl}</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)" dir="ltr">${val}</div>
+      </div>`).join('')}
+    </div>
+
+    ${showComm && (ex.commissionAmt||ex.commissionPct) ? (()=>{
+      const commAmt=parseFloat(ex.commissionAmt)||0;
+      const vatAmt=Math.round(commAmt*0.15*100)/100;
+      const iaFee=Math.round(commAmt*0.01*100)/100;
+      const netComm=Math.round((commAmt-iaFee)*100)/100;
+      return `<div style="padding:14px 18px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:var(--r);margin-bottom:18px">
+        <div style="font-size:10.5px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">💰 ${a('تفاصيل العمولة','Commission Breakdown')}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;font-size:12.5px;color:var(--text2)">
+          <div>${a('نسبة العمولة:','Commission %:')} <b style="color:var(--text)">${ex.commissionPct||0}%</b></div>
+          <div>${a('عمولة الوسيط:','Broker comm.:')} <b dir="ltr">${fmtMoney(commAmt)}</b></div>
+          <div>${a('رسوم الهيئة (1%):','IA Fee (1%):')} <b style="color:#b8740f" dir="ltr">- ${fmtMoney(iaFee)}</b></div>
+          <div>${a('ضريبة القيمة المضافة (15%):','VAT (15%):')} <b dir="ltr">+ ${fmtMoney(vatAmt)}</b></div>
+          <div style="grid-column:1/-1;border-top:1px solid #86efac;padding-top:8px">${a('صافي العمولة:','Net Commission:')} <b style="color:#059669;font-size:14px" dir="ltr">${fmtMoney(netComm)}</b></div>
+        </div>
+      </div>`;
+    })() : ''}
+
+    <div style="margin-bottom:18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">${a('خطة الدفع والتحصيل','Payment & Collection Schedule')}</div>
+        ${isOpsUser() || !isFinUser() ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <select id="pol-paymethod" style="height:32px;border:1.5px solid var(--border);border-radius:8px;padding:0 10px;font-family:var(--font);font-size:12px;background:var(--white);color:var(--text)" onchange="opsPolicySavePayMethod('${r.id}',this.value)">
+            <option value="" ${!ex.paymentMethod?'selected':''}>${a('— طريقة الدفع —','— Payment Method —')}</option>
+            <option value="full"      ${ex.paymentMethod==='full'     ?'selected':''}>${a('دفعة كاملة','Full Payment')}</option>
+            <option value="quarterly" ${ex.paymentMethod==='quarterly'?'selected':''}>${a('ربع سنوية (4 دفعات)','Quarterly (4 installments)')}</option>
+            <option value="semi"      ${ex.paymentMethod==='semi'     ?'selected':''}>${a('نصف سنوية (دفعتان)','Semi-Annual (2 installments)')}</option>
+          </select>
+          <button class="btn btn-p btn-sm" onclick="opsPolicyAutoGen('${r.id}')" style="height:32px;white-space:nowrap">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-inline-end:4px"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            ${a('توليد جدول التحصيل','Auto Generate Schedule')}
+          </button>
+        </div>` : ''}
+      </div>
+      ${inst.length===0
+        ? `<div style="padding:18px;text-align:center;color:var(--text3);font-size:12.5px;border:1.5px dashed var(--border);border-radius:var(--r)">${a('لا توجد دفعات — اختر طريقة الدفع ثم اضغط "توليد جدول التحصيل"','No installments — select payment method then click Auto Generate')}</div>`
+        : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="padding:8px 14px;border-radius:var(--r);background:#f0fdf4;border:1.5px solid #86efac;font-size:12px;color:#15803d;font-weight:700">${a('محصَّل','Collected')} <span dir="ltr">${fmtMoney(paidAmt)}</span></div>
+          <div style="padding:8px 14px;border-radius:var(--r);background:#fef3c7;border:1.5px solid #fcd34d;font-size:12px;color:#b45309;font-weight:700">${a('معلّق','Pending')} <span dir="ltr">${fmtMoney(totalAmt-paidAmt)}</span></div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden">
+          <thead><tr style="background:var(--bg);border-bottom:1.5px solid var(--border)">
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">#</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('المبلغ','Amount')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('الاستحقاق','Due Date')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('الحالة','Status')}</th>
+            <th style="padding:8px 12px;text-align:start;font-size:11px;font-weight:700;color:var(--text2)">${a('تاريخ التحصيل','Collected On')}</th>
+          </tr></thead>
+          <tbody>
+            ${inst.map((x,i)=>{
+              const due=x.dueDate||''; const isPaid=x.status==='paid';
+              const isOvd=!isPaid&&due&&due<today; const isSn=!isPaid&&!isOvd&&due&&due<=new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+              const dot=isPaid?'#16a34a':isOvd?'#dc2626':isSn?'#d97706':'#94a3b8';
+              const sBg=isPaid?'#dcfce7':isOvd?'#fee2e2':isSn?'#fef3c7':'#f1f5f9';
+              const sClr=isPaid?'#16a34a':isOvd?'#dc2626':isSn?'#b45309':'#64748b';
+              const sLbl=isPaid?a('محصَّل','Collected'):isOvd?a('متأخر','Overdue'):isSn?a('قريباً','Due Soon'):a('قادم','Upcoming');
+              return `<tr style="border-bottom:1px solid var(--border);background:${isOvd&&!isPaid?'#fff5f5':isSn&&!isPaid?'#fffbeb':''}">
+                <td style="padding:9px 12px;color:var(--text3)"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${dot};margin-inline-end:5px"></span>${i+1}</td>
+                <td style="padding:9px 12px;font-weight:700;color:var(--text)" dir="ltr">${fmtMoney(parseFloat(x.amount)||0)}</td>
+                <td style="padding:9px 12px;color:var(--text)" dir="ltr">${due||'—'}</td>
+                <td style="padding:9px 12px"><span style="font-size:11px;padding:2px 8px;border-radius:99px;font-weight:600;background:${sBg};color:${sClr}">${sLbl}</span></td>
+                <td style="padding:9px 12px;color:var(--text3)" dir="ltr">${x.paidDate||'—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`}
+    </div>
+
+    ${ct ? `<div style="padding:12px 16px;background:var(--bg);border:1.5px solid var(--border);border-radius:var(--r);margin-bottom:16px">
+      <div style="font-size:10.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${a('بيانات العميل','Client Details')}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;font-size:12.5px;color:var(--text2)">
+        <div>${a('الاسم:','Name:')} <b style="color:var(--text)">${ct.name||'—'}</b></div>
+        <div>${a('المسؤول:','Contact:')} <b style="color:var(--text)">${ct.person||'—'}</b></div>
+        <div dir="ltr">${a('الجوال:','Phone:')} <b style="color:var(--text)">${ct.phone||'—'}</b></div>
+        <div dir="ltr">${a('البريد:','Email:')} <b style="color:var(--text)">${ct.email||'—'}</b></div>
+      </div>
+    </div>` : ''}
+
+    <div style="padding:10px 14px;background:var(--bg);border:1.5px dashed var(--border);border-radius:var(--r);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span style="font-size:11px;color:var(--text3)">${a('الطلب المرتبط:','Linked Request Ref:')}</span>
+      <span style="font-family:'Inter',sans-serif;font-size:12px;font-weight:700;color:var(--text2)">${r.ref}</span>
+      <span style="font-size:11px;color:var(--text3);margin-inline-start:auto">${a('المندوب:','Sales Rep:')} ${r.assignedTo||'—'}</span>
+    </div>
+  </div>`;
+}
+
+/* ════════════════════════════════════════
+   عرض البوليصة — Policy Detail View (Legacy Sales)
    ════════════════════════════════════════ */
 function salesPolicySheet(){
   const r = requests.find(x => x.id === salesCurrentId);
-  if(!r){ salesMode = 'list'; salesNavTab = 'policies'; return salesPoliciesPage(); }
+  if(!r){ salesMode = 'list'; salesNavTab = 'policies'; return polPoliciesPage(); }
 
   const ex   = r.execution   || {};
   const inv  = r.invoice     || {};
@@ -6189,7 +6479,7 @@ const POLICY_STATUSES = [
   {id:'expired',    ar:'منتهية',        en:'Expired',         color:'#64748b', bg:'#f1f5f9'},
 ];
 function polStatusDef(id){ return POLICY_STATUSES.find(s=>s.id===id)||POLICY_STATUSES[0]; }
-function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsToggleUnassigned(){ opsShowUnassigned=!opsShowUnassigned; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
 const _opsColsDef = {client:true,salesRep:true,size:true,type:true,classification:true,tier:true,quotes:true,status:true,kind:false,person:false,phone:false,email:false,date:true,category:false};
 let opsCols = loadColPrefs('erp-ops-cols', _opsColsDef);
 function opsToggleCol(k,v){
@@ -6210,7 +6500,7 @@ function opsNavGo(tab){
 function pgOps(){
   if(opsMode === 'view') return opsViewSheet();
   if(opsNavTab === 'dashboard') return dashOps();
-  if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
+  if(opsNavTab === 'policies') return opsPolMode==='view' ? polPolicyDetailPage() : polPoliciesPage();
   return opsListPage();
 }
 function initOps(){ if(opsMode === 'list' && opsNavTab === 'requests') renderReqList(); }
@@ -6223,29 +6513,22 @@ function pgCRM(){
     crmTab = 'ops';
     if(opsMode === 'view') return opsViewSheet();
     if(opsNavTab === 'dashboard') return dashOps();
-    if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
+    if(opsNavTab === 'policies') return opsPolMode==='view' ? polPolicyDetailPage() : polPoliciesPage();
     return reqListPage();
   }
   if(salesMode === 'view')   return salesViewSheet();
   if(salesMode === 'edit')   return salesEditSheet();
-  if(salesMode === 'policy') return salesPolicySheet();
-  if(crmTab === 'ops'){
-    if(opsMode === 'view') return opsViewSheet();
-    if(opsNavTab === 'dashboard') return dashOps();
-    if(opsNavTab === 'policies') return opsPolMode==='view' ? opsPolicyDetailPage() : opsPoliciesRegistryPage();
-    return reqListPage();
-  }
+  if(opsMode === 'view')     return opsViewSheet();
   if(salesNavTab === 'dashboard') return dashSales();
-  if(salesNavTab === 'policies')  return salesPoliciesPage();
+  if(salesNavTab === 'policies')  return opsPolMode==='view' ? polPolicyDetailPage() : polPoliciesPage();
   return reqListPage();
 }
 function initCRM(){
-  const inOpsMode = isOpsEmp() && !isMgr();
-  if(inOpsMode || crmTab === 'ops'){
+  if(isOpsEmp() && !isMgr()){
     if(opsMode === 'list' && opsNavTab === 'requests') renderReqList();
     return;
   }
-  if(salesMode === 'list' && salesNavTab === 'list') renderReqList();
+  if(opsMode === 'list' && salesNavTab === 'list') renderReqList();
   else if(salesMode === 'view' && salesTab === 'quotes') setTimeout(salesQuoteInitResize,0);
   else if(salesMode === 'edit') setTimeout(salesApplyKindMode,0);
 }
@@ -6293,37 +6576,30 @@ function reqFiltered(){
   const q=(document.getElementById('req-q')?.value||'').toLowerCase().trim();
   const isOps=isOpsEmp(), isSales=isSalesEmp();
   let list=requests.filter(r=>{
-    if(isSales){ if(r.assignedTo!==curUser.user) return false; }
-    else if(isOps){
-      if(r.status!=='sent'&&r.status!=='lost') return false;
-      if(r.handledBy!==curUser.user) return false;
-    }
-    if(isOps){
-      if(opsFilter==='unassigned'){ if(r.handledBy) return false; }
-      else{ const os=r.opsStatus||'inbox'; if(opsFilter!=='all'&&os!==opsFilter) return false; }
-      if(opsTypeFilter!=='all'&&r.insType!==opsTypeFilter) return false;
-      if(opsSourceFilter==='cs'&&r.origin!=='cs') return false;
-      if(opsSourceFilter==='sales'&&r.origin==='cs') return false;
-    } else {
+    // role-based data filter
+    if(isSales)    { if(r.assignedTo!==curUser.user) return false; }
+    else if(isOps) { if(r.status!=='sent'&&r.status!=='lost') return false; if(r.handledBy!==curUser.user) return false; }
+    // dashboard quick-filter (non-ops only)
+    if(!isOps&&salDashFilter){
       if(salDashFilter==='active')        return r.status==='draft'||r.status==='ready';
       if(salDashFilter==='pendingOps')    return r.status==='sent'&&['inbox','received_assigned','processing','pricing','executing'].includes(r.opsStatus||'inbox');
       if(salDashFilter==='waitingClient') return r.status==='sent'&&['sent_client','quote_ready','ready_to_send','waiting_client','approved'].includes(r.opsStatus);
       if(salDashFilter==='stagnant')      return !['lost','done'].includes(r.opsStatus||'')&&r.status!=='lost'&&daysInCurrentStatus(r)>14;
-      if(reqStatusFilter!=='all'){
-        if(r.status!==reqStatusFilter&&(r.opsStatus||'inbox')!==reqStatusFilter) return false;
-      }
-      if(reqTypeFilter!=='all'&&r.insType!==reqTypeFilter) return false;
-      if(reqDateFrom&&r.created&&r.created<reqDateFrom) return false;
-      if(reqDateTo&&r.created&&r.created>reqDateTo+' 99') return false;
     }
+    // unified status filter
+    if(opsFilter==='unassigned'){ if(r.handledBy) return false; }
+    else{ const os=r.opsStatus||'inbox'; if(opsFilter!=='all'&&os!==opsFilter) return false; }
+    // unified type + source filter
+    if(opsTypeFilter!=='all'&&r.insType!==opsTypeFilter) return false;
+    if(opsSourceFilter==='cs'&&r.origin!=='cs') return false;
+    if(opsSourceFilter==='sales'&&r.origin==='cs') return false;
     if(q){ const hay=(r.ref+' '+(salesClientName(r)||'')+' '+(r.notes||'')).toLowerCase(); if(!hay.includes(q)) return false; }
     return true;
   });
-  if(isOps){
-    if(opsListTab==='archive')  list=list.filter(r=>r.status==='lost'||r.opsStatus==='done');
-    else if(opsListTab==='issuance') list=list.filter(r=>r.status==='sent'&&['executing','issued','done'].includes(r.opsStatus));
-    else list=list.filter(r=>r.status==='sent'&&!['done'].includes(r.opsStatus));
-  }
+  // unified tab filter
+  if(opsListTab==='archive')   list=list.filter(r=>r.status==='lost'||r.opsStatus==='done');
+  else if(opsListTab==='issuance') list=list.filter(r=>r.status==='sent'&&['executing','issued','done'].includes(r.opsStatus||''));
+  else list=list.filter(r=>r.status!=='lost'&&r.opsStatus!=='done');
   list.sort((a,b)=>{const an=parseInt((a.ref||'').match(/(\d+)$/)?.[1])||parseInt(a.id)||0,bn=parseInt((b.ref||'').match(/(\d+)$/)?.[1])||parseInt(b.id)||0; return reqSortDir==='asc'?an-bn:bn-an;});
   return list;
 }
@@ -6361,7 +6637,7 @@ function reqListPage(){
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       <input type="text" id="req-q" placeholder="${a('بحث في الطلبات...','Search requests...')}" oninput="renderReqList()"/>
     </div>
-    ${isOps?`<div id="ops-status-bar-wrap">${opsStatusBarHTML()}</div>`:`<div id="req-status-bar-wrap">${reqStatusBarHTML()}</div>`}
+    <div id="ops-status-bar-wrap">${opsStatusBarHTML()}</div>
     ${salDashFilter?`<button class="btn btn-o btn-sm" onclick="salDashFilter=null;renderReqList()">${a('مسح الفلتر','Clear filter')}</button>`:''}
     <div style="margin-inline-start:auto;display:flex;gap:1px;align-self:center">
       <button onclick="reqSetView('cards')" title="${a('بطاقات','Cards')}" style="width:26px;height:24px;border:none;background:transparent;border-radius:5px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:${reqView==='cards'?'var(--blue)':'var(--text3)'};transition:color .13s" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='${reqView==='cards'?'var(--blue)':'var(--text3)'}'"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
@@ -6375,8 +6651,8 @@ function renderReqList(){
   const area=document.getElementById('req-area'); if(!area) return;
   const list=reqFiltered();
   if(!list.length){
-    const hasFilter=reqStatusFilter!=='all'||reqTypeFilter!=='all'||reqDateFrom||reqDateTo||salDashFilter;
-    area.innerHTML=`<div style="text-align:center;padding:44px;color:var(--text3);font-size:13px">${a('لا توجد طلبات','No requests found')}${hasFilter?`<div style="margin-top:14px"><button class="btn btn-o btn-sm" onclick="reqStatusFilter='all';reqTypeFilter='all';reqDateFrom='';reqDateTo='';salDashFilter=null;renderReqStatusBar();renderReqList()">${a('مسح الفلاتر','Clear Filters')}</button></div>`:''}</div>`;
+    const hasFilter=opsFilter!=='all'||opsTypeFilter!=='all'||opsSourceFilter!=='all'||salDashFilter||opsListTab!=='active';
+    area.innerHTML=`<div style="text-align:center;padding:44px;color:var(--text3);font-size:13px">${a('لا توجد طلبات','No requests found')}${hasFilter?`<div style="margin-top:14px"><button class="btn btn-o btn-sm" onclick="opsFilter='all';opsTypeFilter='all';opsSourceFilter='all';opsListTab='active';salDashFilter=null;renderOpsStatusBar();renderReqList()">${a('مسح الفلاتر','Clear Filters')}</button></div>`:''}</div>`;
     return;
   }
   area.innerHTML=reqView==='cards'?renderReqCards(list):renderReqTable(list);
@@ -6580,11 +6856,21 @@ function renderOpsStatusBar(){
   const w = document.getElementById('ops-status-bar-wrap');
   if(w) w.innerHTML = opsStatusBarHTML();
 }
+function reqBaseList(){
+  const isOps=isOpsEmp(), isSales=isSalesEmp();
+  return requests.filter(r=>{
+    if(isSales) return r.assignedTo===curUser?.user;
+    if(isOps)   return (r.status==='sent'||r.status==='lost')&&r.handledBy===curUser?.user;
+    return true;
+  });
+}
 function opsStatusBarHTML(){
-  const reqs = opsRequests();
-  const allR = opsRequestsAll();
-  const cntActive   = allR.filter(r => r.status==='sent' && !['done'].includes(r.opsStatus)).length;
-  const cntIssuance = allR.filter(r => r.status==='sent' && ['executing','issued','done'].includes(r.opsStatus)).length;
+  const allR = reqBaseList();
+  const reqs = opsListTab==='archive'   ? allR.filter(r=>r.status==='lost'||r.opsStatus==='done')
+             : opsListTab==='issuance'  ? allR.filter(r=>r.status==='sent'&&['executing','issued','done'].includes(r.opsStatus||''))
+             : allR.filter(r=>r.status!=='lost'&&r.opsStatus!=='done');
+  const cntActive   = allR.filter(r => r.status!=='lost' && r.opsStatus!=='done').length;
+  const cntIssuance = allR.filter(r => r.status==='sent' && ['executing','issued','done'].includes(r.opsStatus||'')).length;
   const cntArchive  = allR.filter(r => r.status==='lost' || r.opsStatus==='done').length;
   const tabLabels = {
     active:   a('الطلبات النشطة','Active Requests'),
@@ -6674,7 +6960,7 @@ function opsSetFilter(id){
 function opsSetView(v){
   opsView = v;
   const c = document.getElementById('appContent');
-  if(c){ c.innerHTML = pgOps(); setTimeout(initOps, 0); }
+  if(c){ c.innerHTML = pgCRM(); setTimeout(initCRM, 0); }
 }
 
 let opsTypeFilter = 'all';
@@ -6901,9 +7187,9 @@ function opsOpen(id){ opsCurrentId = id; opsMode = 'view'; opsTab = 'info'; navi
 function opsBackList(){ opsMode = 'list'; opsCurrentId = null; if(opsNavTab === 'dashboard') opsNavTab = 'requests'; navigate('operations'); }
 
 /* ════════════════ سجل الوثائق — Policy Registry (Ops) ════════════════ */
-function opsPolOpen(reqId){ opsPolCurrentId=reqId; opsPolMode='view'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
-function opsPolBack(){ opsPolCurrentId=null; opsPolMode='list'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
-function opsPolDoSort(key){ if(opsPolSortKey===key){opsPolSortDir=opsPolSortDir==='desc'?'asc':'desc';}else{opsPolSortKey=key;opsPolSortDir='asc';} const c=document.getElementById('appContent'); if(c){c.innerHTML=pgOps();setTimeout(initOps,0);} }
+function opsPolOpen(reqId){ opsPolCurrentId=reqId; opsPolMode='view'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
+function opsPolBack(){ opsPolCurrentId=null; opsPolMode='list'; const c=document.getElementById('appContent'); if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
+function opsPolDoSort(key){ if(opsPolSortKey===key){opsPolSortDir=opsPolSortDir==='desc'?'asc':'desc';}else{opsPolSortKey=key;opsPolSortDir='asc';} const c=document.getElementById('appContent'); if(c){c.innerHTML=pgCRM();setTimeout(initCRM,0);} }
 
 function opsPoliciesRegistryPage(){
   const today = new Date().toISOString().slice(0,10);
@@ -6992,7 +7278,7 @@ function opsPoliciesRegistryPage(){
 
 function opsPolicyDetailPage(){
   const r = requests.find(x=>String(x.id)===String(opsPolCurrentId));
-  if(!r){ opsPolMode='list'; return opsPoliciesRegistryPage(); }
+  if(!r){ opsPolMode='list'; return polPoliciesPage(); }
   const ex=r.execution||{};
   const clientName=salesClientName(r)||r.clientName||'—';
   const c=r.contactId?contacts.find(x=>String(x.id)===String(r.contactId)):null;
@@ -8410,7 +8696,7 @@ function opsPolicyAutoGen(reqId){
   r.installments = installments;
   sbSyncReq(r.id);
   const c = document.getElementById('appContent');
-  if(c){ c.innerHTML = pgOps(); setTimeout(initOps, 0); }
+  if(c){ c.innerHTML = pgCRM(); setTimeout(initCRM, 0); }
 }
 
 
@@ -16495,47 +16781,18 @@ const ST_TABS = [
   {id:'appear',  ar:'المظهر',        en:'Appearance',  icon:'<circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/>'},
 ];
 
-function settingsTopbarActions(){
-  const cur = ST_TABS.find(t => t.id === stTab) || ST_TABS[0];
-  return `<div class="nav-dd-wrap">
-    <span class="nav-dd-label">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${cur.icon}</svg>
-      ${lang==='ar'?cur.ar:cur.en}
-    </span>
-    <button class="nav-dd-toggle" id="st-nav-btn" onclick="stNavToggle(event)">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </button>
-    <div class="nav-dd ${lang==='ar'?'rtl':'ltr'}" id="st-nav-dd">
-      ${ST_TABS.map(t=>`
-      <button class="nav-dd-item ${stTab===t.id?'active':''}" onclick="stSetTab('${t.id}');stNavClose()">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${t.icon}</svg>
-        ${lang==='ar'?t.ar:t.en}
-      </button>`).join('')}
-    </div>
-  </div>`;
-}
-function stNavToggle(e){
-  e.stopPropagation();
-  const dd = document.getElementById('st-nav-dd');
-  if(!dd) return;
-  const open = dd.style.display !== 'block';
-  dd.style.display = open ? 'block' : 'none';
-  if(open){ setTimeout(()=>document.addEventListener('click', stNavClose, {once:true}), 0); }
-}
-function stNavClose(){ const dd=document.getElementById('st-nav-dd'); if(dd) dd.style.display='none'; }
+function settingsTopbarActions(){ return ''; }
 
 function pgSettings(){
   if(!isMgr()){ return `<div style="padding:80px;text-align:center"><h2 style="color:var(--text2)">${a('ممنوع الوصول','Access Denied')}</h2></div>`; }
-  const cur = ST_TABS.find(t => t.id === stTab) || ST_TABS[0];
   return `
-  ${heading(lang==='ar'?cur.ar:cur.en, '')}
+  ${heading(a('الإعدادات','Settings'), '')}
   <div id="st-body">${stTabContent()}</div>`;
 }
 
 function stSetTab(id){
   stTab = id;
-  const tbActions = document.getElementById('tbActions');
-  if(tbActions) tbActions.innerHTML = settingsTopbarActions();
+  updateSubnav('settings');
   const c = document.getElementById('appContent');
   if(c){ c.innerHTML = pgSettings(); if(typeof syncThemeUI==='function') setTimeout(syncThemeUI,0); }
 }
@@ -17825,7 +18082,7 @@ initApp();
 </script>
 
 <!-- لوحة الإشعارات — Notification Panel -->
-<div id="notif-panel" style="display:none;position:fixed;top:0;left:0;z-index:9500;background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:0 8px 32px #0003;width:300px;max-height:420px;overflow-y:auto;direction:inherit"></div>
+<div id="notif-panel" style="display:none;position:fixed;top:0;left:0;z-index:9500;background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:0 8px 32px #0003;width:360px;max-height:480px;overflow-y:auto;direction:inherit"></div>
 
 </body>
 </html>
