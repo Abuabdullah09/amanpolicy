@@ -2724,9 +2724,7 @@ async function afterLogin(user){
   if(_cuIdx >= 0){ users[_cuIdx].name=curUser.name; users[_cuIdx].nEn=curUser.nEn; users[_cuIdx].user=curUser.user; users[_cuIdx].role=curUser.role; users[_cuIdx].pages=curUser.pages; users[_cuIdx].features=curUser.features||[]; }
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appShell').classList.add('visible');
-  const _savedPage = localStorage.getItem('aman_curPage');
-  if(_savedPage && _savedPage !== 'hub' && canAccess(_savedPage)) navigate(_savedPage);
-  else goHub();
+  goHub();
   // clear any leftover notifications from a previous user session
   notifications = [];
   localStorage.removeItem('erp_notifs');
@@ -17910,173 +17908,970 @@ function secNotif(){ return ''; }
 /* ===== hr.js ===== */
 /* ════════════════════════════════════════════════
    AMAN POLICY ERP — HR (الموارد البشرية)
-   الأسلاك الخارجية:
-   - يكتب في contacts[] عند حفظ موظف (سلك واحد باتجاه واحد)
-   - يستخدم: a(), isMgr(), heading(), navigate(), closeM()
+   External wires:
+   - reads/writes contacts[] for employee contact sync
+   - reads requests[] for commission tracking
+   - uses: a(), heading(), navigate(), canEdit(), sbInsert(), sbUpdate()
    ════════════════════════════════════════════════ */
 
+/* ── state ── */
+let employees = [];
+let hrMode = 'list';     // 'list' | 'view' | 'edit'
+let hrCurrentId = null;
+let hrViewTab = 'info';  // 'info' | 'salary' | 'leaves' | 'commissions' | 'docs'
+let hrDeptFilter = 'all';
+let hrSearch = '';
+let hrTab = 'employees'; // legacy compat
+let hrListTab = 'employees'; // 'employees' | 'payroll' | 'expiring'
+let hrPayrollMonth = new Date().getMonth() + 1;
+let hrPayrollYear = new Date().getFullYear();
+let hrLeaveFormEmpId = null;
+let hrPerfFormEmpId = null;
+
+/* ── label helpers ── */
+function hrDeptLabel(d){ return {all:a('كل الأقسام','All'), finance:a('المالية','Finance'), sales:a('المبيعات','Sales'), operations:a('الأوبريشن','Operations'), customers:a('خدمة العملاء','Customers'), hr:a('الموارد البشرية','HR')}[d] || d || '—'; }
+function hrRoleLabel(r){ return {superadmin:a('مدير النظام','Sys. Admin'), manager:a('مدير','Manager'), employee:a('موظف','Employee')}[r] || r || '—'; }
+function hrContractLabel(c){ return {full_time:a('دوام كامل','Full-time'), part_time:a('دوام جزئي','Part-time'), contract:a('عقد مؤقت','Contract'), probation:a('تجريبي','Probation')}[c] || c || '—'; }
+function hrGenderLabel(g){ return {male:a('ذكر','Male'), female:a('أنثى','Female')}[g] || '—'; }
+function hrMaritalLabel(m){ return {single:a('أعزب','Single'), married:a('متزوج','Married'), divorced:a('مطلق','Divorced'), widowed:a('أرمل','Widowed')}[m] || '—'; }
+function hrEsc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ── calculation helpers ── */
+function hrLinkedContact(e){ return contacts.find(c => c._empId === e.id) || null; }
+function hrTotalSalary(e){ return (e.basicSalary||e.salary||0)+(e.housingAllowance||0)+(e.transportAllowance||0)+(e.mobileAllowance||0)+(e.otherAllowances||0); }
+function hrIsSaudi(e){ const n=(e.nationality||'').toLowerCase(); return n==='saudi'||n.includes('سعودي'); }
+function hrGosiEmployee(e){ return hrIsSaudi(e) ? hrTotalSalary(e)*0.0975 : 0; }
+function hrGosiEmployer(e){ return hrTotalSalary(e)*(hrIsSaudi(e)?0.1175:0.02); }
+function hrYearsOfService(e){ if(!e.joined) return 0; return Math.max(0,(Date.now()-new Date(e.joined).getTime())/(365.25*24*3600*1000)); }
+function hrLeaveEntitlement(e){ return hrYearsOfService(e)>=5?30:21; }
+function hrUsedLeave(e){ return (e.leaveRequests||[]).filter(l=>l.status==='approved').reduce((s,l)=>s+(l.days||0),0); }
+function hrEndOfServiceCalc(e){ const y=hrYearsOfService(e); const m=hrTotalSalary(e); if(y<1) return 0; return y<5 ? m*0.5*Math.floor(y) : m*Math.floor(y); }
+function hrEmpCommissions(e){ return (requests||[]).filter(r=>r.assignedTo===e.name&&r.status==='closed'&&(r.commissionAmount||0)>0); }
+
+/* ── KPI card ── */
 function hrKpi(label, value, color, icon, sub){
-  return `
-  <div class="dash-kpi" style="border-top:3px solid ${color}">
-    <div class="dash-kpi-top">
-      <span class="dash-kpi-label">${label}</span>
-      <div class="dash-kpi-ic" style="color:${color}">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>
-      </div>
-    </div>
-    <div class="dash-kpi-val">${value}</div>
-    ${sub ? `<div class="dash-kpi-sub">${sub}</div>` : ''}
+  return `<div class="dash-kpi" style="border-top:3px solid ${color}">
+    <div class="dash-kpi-top"><span class="dash-kpi-label">${label}</span><div class="dash-kpi-ic" style="color:${color}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></div></div>
+    <div class="dash-kpi-val">${value}</div>${sub?`<div class="dash-kpi-sub">${sub}</div>`:''}
   </div>`;
 }
 
-let hrTab = 'employees';
-let hrSearch = '';
-
-let employees = [];
-
-const deptLabels = {all:a('كل الأقسام','All Depts'), finance:a('المالية','Finance'), sales:a('المبيعات','Sales'), operations:a('الأوبريشن','Operations'), customers:a('خدمة العملاء','Customer Service')};
-const roleLabels = {superadmin:a('مدير النظام','System Admin'), manager:a('مدير قسم','Dept. Manager'), employee:a('موظف','Employee')};
-
-function hrDeptLabel(d){ return {all:a('كل الأقسام','All'), finance:a('المالية','Finance'), sales:a('المبيعات','Sales'), operations:a('الأوبريشن','Operations'), customers:a('خدمة العملاء','Customers'), hr:a('الموارد البشرية','HR')}[d] || d; }
-function hrRoleLabel(r){ return {superadmin:a('مدير النظام','Sys. Admin'), manager:a('مدير قسم','Manager'), employee:a('موظف','Employee')}[r] || r; }
-
+/* ══════════════════════════════════════════════════
+   PAGES
+══════════════════════════════════════════════════ */
 function pgHR(){
-  const totalSalary = employees.reduce((s,e)=>s+e.salary,0);
-  const activeEmp = employees.filter(e=>e.status==='active').length;
-  const managers = employees.filter(e=>e.role==='manager'||e.role==='superadmin').length;
-  const commEmp = employees.filter(e=>e.commission>0).length;
+  if(hrMode==='view'&&hrCurrentId) return hrViewSheet();
+  if(hrMode==='edit') return hrEditSheet();
+  return hrListPage();
+}
+
+function hrSubTabs(active){
+  return `<div class="tabs" style="margin-bottom:16px">
+    <button class="tab-btn ${active==='employees'?'active':''}" onclick="hrListTab='employees';renderPage('hr')">${a('الموظفون','Employees')}</button>
+    <button class="tab-btn ${active==='payroll'?'active':''}" onclick="hrListTab='payroll';renderPage('hr')">${a('مسير الرواتب','Payroll Run')}</button>
+    <button class="tab-btn ${active==='expiring'?'active':''}" onclick="hrListTab='expiring';renderPage('hr')">${a('وثائق منتهية','Expiring Docs')}</button>
+  </div>`;
+}
+
+function hrListPage(){
+  if(hrListTab==='payroll') return hrPayrollPage();
+  if(hrListTab==='expiring') return hrExpiringPage();
+  const q=(hrSearch||'').toLowerCase();
+  const filtered=employees.filter(e=>{
+    if(hrDeptFilter!=='all'&&e.dept!==hrDeptFilter) return false;
+    if(q&&!e.name.includes(q)&&!(e.nEn||'').toLowerCase().includes(q)&&!(e.jobTitle||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const totalSalary=employees.reduce((s,e)=>s+hrTotalSalary(e),0);
+  const activeEmp=employees.filter(e=>e.status==='active').length;
+  const managers=employees.filter(e=>e.role==='manager'||e.role==='superadmin').length;
+  const commEmp=employees.filter(e=>(e.commission||0)>0).length;
   return `
-  ${heading(a('الموارد البشرية','Human Resources'), a('إدارة الموظفين والعمولات','Employee & commission management'))}
+  ${heading(a('الموارد البشرية','Human Resources'),a('إدارة الموظفين','Employee Management'))}
+  ${hrSubTabs('employees')}
   <div class="dash-kpi-grid" style="margin-bottom:18px">
-    ${hrKpi(a('إجمالي الموظفين','Total Employees'), employees.length, '#1e4d8c', '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>', a('موظف نشط','active'))}
-    ${hrKpi(a('الرواتب الشهرية','Monthly Salaries'), 'SAR '+totalSalary.toLocaleString(), '#1e7a52', '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', a('إجمالي الرواتب','total'))}
-    ${hrKpi(a('المدراء','Managers'), managers, '#b8740f', '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>', '')}
-    ${hrKpi(a('موظفو العمولات','Commission Staff'), commEmp, '#6b46a8', '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>', a('يستلمون عمولة','with commission'))}
+    ${hrKpi(a('إجمالي الموظفين','Total Employees'),employees.length,'#1e4d8c','<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',activeEmp+' '+a('نشط','active'))}
+    ${hrKpi(a('إجمالي الرواتب','Total Salaries'),'SAR '+(totalSalary/1000).toFixed(1)+'K','#1e7a52','<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',a('شهرياً','monthly'))}
+    ${hrKpi(a('المدراء','Managers'),managers,'#b8740f','<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>','')}
+    ${hrKpi(a('موظفو العمولات','Commission Staff'),commEmp,'#6b46a8','<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>',a('يستلمون عمولة','with commission'))}
   </div>
   <div class="card">
     <div class="card-hd">
       <span class="card-tt">${a('قائمة الموظفين','Employees')}</span>
-      ${canEdit('hr') ? `<button class="btn btn-p btn-sm" onclick="hrAddModal()">+ ${a('موظف جديد','New Employee')}</button>` : ''}
+      ${canEdit('hr')?`<button class="btn btn-p btn-sm" onclick="hrNewEmployee()">+ ${a('موظف جديد','New Employee')}</button>`:''}
     </div>
     <div class="card-bd" style="padding:14px">
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <div class="tb-search" style="flex:1;min-width:180px">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="hrSrch" placeholder="${a('بحث باسم الموظف...','Search employee...')}" oninput="hrSearch=this.value;renderHRTable()" value="${hrSearch}">
+          <input id="hrSrch" placeholder="${a('بحث...','Search...')}" oninput="hrSearch=this.value;renderPage('hr')" value="${hrEsc(hrSearch)}">
         </div>
+        <select class="fs" style="width:auto;min-width:140px" onchange="hrDeptFilter=this.value;renderPage('hr')">
+          ${['all','finance','sales','operations','customers','hr'].map(d=>`<option value="${d}" ${hrDeptFilter===d?'selected':''}>${hrDeptLabel(d)}</option>`).join('')}
+        </select>
       </div>
-      <div class="tw"><table id="hrTable">
+      <div class="tw"><table>
         <thead><tr>
           <th>${a('الموظف','Employee')}</th>
           <th>${a('القسم','Dept')}</th>
-          <th>${a('الدور','Role')}</th>
+          <th>${a('المسمى الوظيفي','Job Title')}</th>
           <th>${a('الراتب','Salary')}</th>
-          <th>${a('العمولة %','Commission %')}</th>
           <th>${a('الحالة','Status')}</th>
-          ${canEdit('hr')?`<th></th>`:''}
+          <th>${a('تاريخ التعيين','Joined')}</th>
+          <th></th>
         </tr></thead>
-        <tbody id="hrTbody"></tbody>
+        <tbody>
+          ${!filtered.length?`<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">${a('لا توجد نتائج','No results')}</td></tr>`:
+            filtered.map(e=>`<tr style="cursor:pointer" onclick="hrOpenView(${e.id})">
+              <td>
+                <div style="font-weight:700;color:var(--text)">${hrEsc(lang==='ar'?e.name:(e.nEn||e.name))}</div>
+                <div style="font-size:11px;color:var(--text3)">${hrRoleLabel(e.role)}</div>
+              </td>
+              <td>${hrDeptLabel(e.dept)}</td>
+              <td>${hrEsc(e.jobTitle||'—')}</td>
+              <td dir="ltr" style="font-family:'Inter',sans-serif;font-weight:600">SAR ${hrTotalSalary(e).toLocaleString()}</td>
+              <td><span class="badge ${e.status==='active'?'bg-green':e.status==='terminated'?'bg-red':'bg-gray'}">${e.status==='active'?a('نشط','Active'):e.status==='terminated'?a('منتهي','Terminated'):a('غير نشط','Inactive')}</span></td>
+              <td dir="ltr" style="font-size:12px;color:var(--text2)">${hrEsc(e.joined||'—')}</td>
+              <td><button class="btn btn-o btn-sm" onclick="event.stopPropagation();hrOpenEdit(${e.id})">${a('تعديل','Edit')}</button></td>
+            </tr>`).join('')}
+        </tbody>
       </table></div>
     </div>
+  </div>`;
+}
+
+/* ── VIEW SHEET ── */
+function hrViewSheet(){
+  const e=employees.find(x=>x.id===hrCurrentId);
+  if(!e) return hrListPage();
+  const total=hrTotalSalary(e);
+  const tabs=[{id:'info',label:a('المعلومات','Info')},{id:'salary',label:a('الراتب','Salary')},{id:'leaves',label:a('الإجازات','Leaves')},{id:'payroll',label:a('مسير الراتب','Payroll')},{id:'performance',label:a('الأداء','Performance')},{id:'commissions',label:a('العمولات','Commissions')},{id:'docs',label:a('المستندات','Documents')}];
+  return `
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+    <button class="btn btn-o btn-sm" onclick="hrMode='list';hrCurrentId=null;renderPage('hr')" style="display:flex;align-items:center;gap:4px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+      ${a('رجوع','Back')}
+    </button>
+    <span style="color:var(--text3);font-size:13px">/ ${a('الموارد البشرية','HR')} / ${hrEsc(lang==='ar'?e.name:(e.nEn||e.name))}</span>
   </div>
-  `;
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-bd" style="padding:20px">
+      <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
+        <div style="width:56px;height:56px;border-radius:50%;background:var(--blue-light,#e8f0fd);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--blue);flex-shrink:0">${(e.name||'?').charAt(0)}</div>
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:20px;font-weight:700;color:var(--text)">${hrEsc(lang==='ar'?e.name:(e.nEn||e.name))}</div>
+          ${e.nEn&&lang==='ar'?`<div style="font-size:13px;color:var(--text2)" dir="ltr">${hrEsc(e.nEn)}</div>`:''}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <span class="badge ${e.role==='superadmin'?'bg-purple':e.role==='manager'?'bg-blue':'bg-gray'}">${hrRoleLabel(e.role)}</span>
+            <span class="badge bg-gray">${hrDeptLabel(e.dept)}</span>
+            <span class="badge ${e.status==='active'?'bg-green':e.status==='terminated'?'bg-red':'bg-gray'}">${e.status==='active'?a('نشط','Active'):e.status==='terminated'?a('منتهي العقد','Terminated'):a('غير نشط','Inactive')}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text3);margin-top:6px">${hrEsc(e.jobTitle||'')}${e.employeeNo?' · #'+hrEsc(e.employeeNo):''}${e.joined?' · '+a('منذ','since')+' '+hrEsc(e.joined):''}</div>
+          ${e.status==='terminated'?`<div style="margin-top:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;font-size:12px;color:#c0392b"><strong>${a('تم إنهاء العقد','Contract Terminated')}</strong> — ${hrEsc(e.terminatedAt||'')}${e.terminatedReason?' · '+hrEsc(e.terminatedReason):''}${e.eosAmount?`<br>${a('مكافأة نهاية الخدمة','EOS')}: <strong dir="ltr">SAR ${e.eosAmount.toLocaleString()}</strong>`:''}</div>`:''}
+        </div>
+        <div style="text-align:${lang==='ar'?'left':'right'}">
+          <div style="font-size:22px;font-weight:700;color:var(--blue)" dir="ltr">SAR ${total.toLocaleString()}</div>
+          <div style="font-size:11px;color:var(--text3)">${a('إجمالي الراتب الشهري','Total monthly salary')}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:${lang==='ar'?'flex-start':'flex-end'}">
+            ${canEdit('hr')?`<button class="btn btn-p btn-sm" onclick="hrOpenEdit(${e.id})">${a('تعديل','Edit')}</button>`:''}
+            ${canEdit('hr')&&e.status==='active'?`<button class="btn btn-sm" style="color:#c0392b;border:1px solid #c0392b;background:transparent" onclick="hrTerminateEmployee(${e.id})">${a('إنهاء العقد','Terminate')}</button>`:''}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="tabs" style="margin-bottom:16px">
+    ${tabs.map(t=>`<button class="tab-btn ${hrViewTab===t.id?'active':''}" onclick="hrViewTab='${t.id}';renderPage('hr')">${t.label}</button>`).join('')}
+  </div>
+  ${hrViewTabContent(e)}`;
 }
 
-let hrEditId = null;
-
-function initHR(){
-  renderHRTable();
+function hrViewTabContent(e){
+  if(hrViewTab==='salary') return hrSalaryTab(e);
+  if(hrViewTab==='leaves') return hrLeavesTab(e);
+  if(hrViewTab==='payroll') return hrPayrollTab(e);
+  if(hrViewTab==='performance') return hrPerformanceTab(e);
+  if(hrViewTab==='commissions') return hrCommissionsTab(e);
+  if(hrViewTab==='docs') return hrDocsTab(e);
+  return hrInfoTab(e);
 }
 
-function renderHRTable(){
-  const q = (hrSearch||'').toLowerCase();
-  const rows = employees.filter(e =>
-    e.name.includes(q) || (e.nEn||'').toLowerCase().includes(q) || hrDeptLabel(e.dept).includes(q)
-  );
-  const tbody = document.getElementById('hrTbody');
-  if(!tbody) return;
-  if(!rows.length){
-    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">${a('لا توجد نتائج','No results')}</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = rows.map(e => `
-    <tr>
-      <td><div style="font-weight:700;color:var(--text)">${lang==='ar'?e.name:e.nEn}</div><div style="font-size:11px;color:var(--text3)" dir="ltr">${e.email}</div></td>
-      <td>${hrDeptLabel(e.dept)}</td>
-      <td><span class="badge ${e.role==='superadmin'?'bg-purple':e.role==='manager'?'bg-blue':'bg-gray'}">${hrRoleLabel(e.role)}</span></td>
-      <td dir="ltr" style="font-family:'Inter',sans-serif;font-weight:600">${e.salary.toLocaleString()} ${a('ر.س','SAR')}</td>
-      <td style="text-align:center">${e.commission>0?`<span class="badge bg-green">${e.commission}%</span>`:'—'}</td>
-      <td><span class="badge ${e.status==='active'?'bg-green':'bg-gray'}">${e.status==='active'?a('نشط','Active'):a('غير نشط','Inactive')}</span></td>
-      ${canEdit('hr')?`<td><button class="btn btn-o btn-sm" onclick="hrEditModal(${e.id})">${a('تعديل','Edit')}</button></td>`:''}
-    </tr>`).join('');
+function hrInfoTab(e){
+  const c=hrLinkedContact(e);
+  const row=(label,val)=>val?`<tr><td style="color:var(--text2);font-size:13px;padding:6px 12px;white-space:nowrap">${label}</td><td style="padding:6px 12px;font-size:13px;font-weight:500">${val}</td></tr>`:'';
+  return `
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('المعلومات الشخصية','Personal Info')}</span></div>
+      <div class="card-bd" style="padding:0"><table style="width:100%;border-collapse:collapse">
+        ${row(a('الجنسية','Nationality'),hrEsc(e.nationality)||'—')}
+        ${row(a('نوع الهوية','ID Type'),hrEsc(e.idType)||'—')}
+        ${row(a('رقم الهوية','ID Number'),hrEsc(e.idnum)||'—')}
+        ${row(a('انتهاء الهوية','ID Expiry'),hrEsc(e.idexp)||'—')}
+        ${row(a('تاريخ الميلاد','Birth Date'),hrEsc(e.birthDate)||'—')}
+        ${row(a('الجنس','Gender'),hrGenderLabel(e.gender))}
+        ${row(a('الحالة الاجتماعية','Marital Status'),hrMaritalLabel(e.maritalStatus))}
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('معلومات الوظيفة','Employment Info')}</span></div>
+      <div class="card-bd" style="padding:0"><table style="width:100%;border-collapse:collapse">
+        ${row(a('رقم الموظف','Employee #'),hrEsc(e.employeeNo)||'—')}
+        ${row(a('المسمى الوظيفي','Job Title'),hrEsc(e.jobTitle)||'—')}
+        ${row(a('نوع العقد','Contract'),hrContractLabel(e.contractType))}
+        ${row(a('نهاية التجربة','Probation End'),hrEsc(e.probationEnd)||'—')}
+        ${row(a('تاريخ التعيين','Joined'),hrEsc(e.joined)||'—')}
+        ${row(a('سنوات الخدمة','Years of Service'),hrYearsOfService(e).toFixed(1)+' '+a('سنة','yrs'))}
+        ${row(a('الجوال','Phone'),hrEsc(e.phone)||'—')}
+        ${row(a('البريد','Email'),hrEsc(e.email)||'—')}
+      </table></div>
+    </div>
+    ${e.address?`<div class="card"><div class="card-hd"><span class="card-tt">${a('العنوان','Address')}</span></div><div class="card-bd"><p style="margin:0;font-size:13px;line-height:1.6">${hrEsc(e.address)}</p></div></div>`:''}
+    ${c?`<div class="card"><div class="card-hd"><span class="card-tt">${a('جهة الاتصال المرتبطة','Linked Contact')}</span></div>
+      <div class="card-bd">
+        <div style="font-size:13px;font-weight:600">${hrEsc(c.name)}</div>
+        <div style="font-size:12px;color:var(--text2)">${hrEsc(c.phone||'')} ${hrEsc(c.email||'')}</div>
+        <button class="btn btn-o btn-sm" style="margin-top:8px" onclick="ccOpen(${c.id})">${a('فتح جهة الاتصال','Open Contact')}</button>
+      </div></div>`:''}
+  </div>`;
 }
 
-function hrAddModal(){
-  hrEditId = null;
-  document.getElementById('hrModalTitle').textContent = a('موظف جديد','New Employee');
-  ['name','nameEn','dept','role','salary','commission','phone','email'].forEach(f=>{
-    const el = document.getElementById('hr-'+f);
-    if(el) el.value = f==='dept'?'sales':f==='role'?'employee':f==='commission'?'0':'';
-  });
-  document.getElementById('hrModal').classList.add('open');
+function hrSalaryTab(e){
+  const basic=e.basicSalary||e.salary||0;
+  const housing=e.housingAllowance||0;
+  const transport=e.transportAllowance||0;
+  const mobile=e.mobileAllowance||0;
+  const other=e.otherAllowances||0;
+  const total=basic+housing+transport+mobile+other;
+  const gosiEmp=hrGosiEmployee(e);
+  const gosiEr=hrGosiEmployer(e);
+  const isSaudi=hrIsSaudi(e);
+  const eos=hrEndOfServiceCalc(e);
+  const net=total-gosiEmp;
+  const fmt=(n)=>n.toLocaleString(undefined,{maximumFractionDigits:2});
+  return `
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('هيكل الراتب','Salary Structure')}</span></div>
+      <div class="card-bd" style="padding:0"><table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('الراتب الأساسي','Basic Salary')}</td><td style="padding:8px 12px;text-align:end;font-weight:600" dir="ltr">SAR ${basic.toLocaleString()}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('بدل سكن','Housing')}</td><td style="padding:8px 12px;text-align:end" dir="ltr">SAR ${housing.toLocaleString()}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('بدل نقل','Transport')}</td><td style="padding:8px 12px;text-align:end" dir="ltr">SAR ${transport.toLocaleString()}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('بدل جوال','Mobile')}</td><td style="padding:8px 12px;text-align:end" dir="ltr">SAR ${mobile.toLocaleString()}</td></tr>
+        ${other?`<tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('بدلات أخرى','Other')}</td><td style="padding:8px 12px;text-align:end" dir="ltr">SAR ${other.toLocaleString()}</td></tr>`:''}
+        <tr style="border-top:2px solid var(--border)"><td style="padding:8px 12px;font-size:14px;font-weight:700">${a('إجمالي الراتب','Total')}</td><td style="padding:8px 12px;text-align:end;font-weight:700;color:var(--blue)" dir="ltr">SAR ${total.toLocaleString()}</td></tr>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('التأمينات (جوسي)','GOSI')}</span></div>
+      <div class="card-bd" style="padding:0"><table style="width:100%;border-collapse:collapse">
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('الجنسية','Nationality')}</td><td style="padding:8px 12px;text-align:end"><span class="badge ${isSaudi?'bg-green':'bg-gray'}">${isSaudi?a('سعودي','Saudi'):a('غير سعودي','Non-Saudi')}</span></td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('نسبة الموظف','Employee %')}</td><td style="padding:8px 12px;text-align:end;font-size:13px">${isSaudi?'9.75%':a('لا ينطبق','N/A')}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('نسبة صاحب العمل','Employer %')}</td><td style="padding:8px 12px;text-align:end;font-size:13px">${isSaudi?'11.75%':'2%'}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('خصم الموظف','Employee deduction')}</td><td style="padding:8px 12px;text-align:end;font-weight:600;color:#c0392b" dir="ltr">SAR ${fmt(gosiEmp)}</td></tr>
+        <tr><td style="padding:8px 12px;font-size:13px;color:var(--text2)">${a('حصة صاحب العمل','Employer share')}</td><td style="padding:8px 12px;text-align:end;font-weight:600" dir="ltr">SAR ${fmt(gosiEr)}</td></tr>
+        <tr style="border-top:2px solid var(--border)"><td style="padding:8px 12px;font-size:14px;font-weight:700">${a('صافي الراتب','Net Salary')}</td><td style="padding:8px 12px;text-align:end;font-weight:700;color:#1e7a52" dir="ltr">SAR ${fmt(net)}</td></tr>
+      </table></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('مكافأة نهاية الخدمة','End of Service')}</span></div>
+      <div class="card-bd">
+        <div style="font-size:28px;font-weight:700;color:var(--blue)" dir="ltr">SAR ${eos.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:4px">${a('بناءً على','Based on')} ${hrYearsOfService(e).toFixed(1)} ${a('سنوات خدمة','yrs of service')}</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:2px">${hrYearsOfService(e)<5?a('أقل من 5 سنوات — نصف شهر/سنة','< 5 yrs — half month/year'):a('5 سنوات أو أكثر — شهر كامل/سنة','≥ 5 yrs — full month/year')}</div>
+        ${(e.commission||0)>0?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)"><span style="font-size:12px;color:var(--text2)">${a('نسبة العمولة','Commission rate')}</span> <span class="badge bg-purple">${e.commission}%</span></div>`:''}
+      </div>
+    </div>
+  </div>`;
 }
 
-function hrEditModal(id){
-  const e = employees.find(x=>x.id===id);
-  if(!e) return;
-  hrEditId = id;
-  document.getElementById('hrModalTitle').textContent = a('تعديل موظف','Edit Employee');
-  document.getElementById('hr-name').value = e.name;
-  document.getElementById('hr-nameEn').value = e.nEn||'';
-  document.getElementById('hr-dept').value = e.dept;
-  document.getElementById('hr-role').value = e.role;
-  document.getElementById('hr-salary').value = e.salary;
-  document.getElementById('hr-commission').value = e.commission;
-  document.getElementById('hr-phone').value = e.phone||'';
-  document.getElementById('hr-email').value = e.email||'';
-  document.getElementById('hrModal').classList.add('open');
+function hrLeavesTab(e){
+  const entitlement=hrLeaveEntitlement(e);
+  const leaves=e.leaveRequests||[];
+  const annualUsed=leaves.filter(l=>l.status==='approved'&&(l.typeKey==='annual'||!l.typeKey)).reduce((s,l)=>s+(l.days||0),0);
+  const sickUsed=leaves.filter(l=>l.status==='approved'&&l.typeKey==='sick').reduce((s,l)=>s+(l.days||0),0);
+  const remaining=Math.max(0,entitlement-annualUsed);
+  const typeLabel={annual:a('سنوية','Annual'),sick:a('مرضية','Sick'),emergency:a('طارئة','Emergency'),unpaid:a('بدون راتب','Unpaid')};
+  const showForm = hrLeaveFormEmpId===e.id;
+  return `
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px">
+    <div class="card"><div class="card-bd" style="text-align:center;padding:16px"><div style="font-size:28px;font-weight:700;color:var(--blue)">${entitlement}</div><div style="font-size:12px;color:var(--text2)">${a('الاستحقاق السنوي','Annual Entitlement')}</div></div></div>
+    <div class="card"><div class="card-bd" style="text-align:center;padding:16px"><div style="font-size:28px;font-weight:700;color:#c0392b">${annualUsed}</div><div style="font-size:12px;color:var(--text2)">${a('سنوية مستخدمة','Annual Used')}</div></div></div>
+    <div class="card"><div class="card-bd" style="text-align:center;padding:16px"><div style="font-size:28px;font-weight:700;color:#1e7a52">${remaining}</div><div style="font-size:12px;color:var(--text2)">${a('سنوية متبقية','Annual Remaining')}</div></div></div>
+    <div class="card"><div class="card-bd" style="text-align:center;padding:16px"><div style="font-size:28px;font-weight:700;color:#b8740f">${sickUsed}</div><div style="font-size:12px;color:var(--text2)">${a('أيام مرضية','Sick Days')}</div></div></div>
+  </div>
+  ${showForm?`
+  <div class="card" style="margin-bottom:16px;border:2px solid var(--blue)">
+    <div class="card-hd"><span class="card-tt">${a('طلب إجازة جديد','New Leave Request')}</span></div>
+    <div class="card-bd">
+      <div class="fg-grid">
+        <div class="fg"><label class="flabel">${a('نوع الإجازة','Leave Type')}</label>
+          <select class="fs" id="hrl-type">
+            <option value="annual">${a('سنوية','Annual')}</option>
+            <option value="sick">${a('مرضية','Sick')}</option>
+            <option value="emergency">${a('طارئة','Emergency')}</option>
+            <option value="unpaid">${a('بدون راتب','Unpaid')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('من تاريخ','From')}</label><input class="fi" id="hrl-from" type="date"/></div>
+        <div class="fg"><label class="flabel">${a('إلى تاريخ','To')}</label><input class="fi" id="hrl-to" type="date"/></div>
+        <div class="fg"><label class="flabel">${a('اسم المستند (للإجازة المرضية)','Doc name (sick leave)')}</label><input class="fi" id="hrl-doc" placeholder="${a('مثال: تقرير طبي.pdf','e.g. medical_report.pdf')}"/></div>
+        <div class="fg" style="grid-column:1/-1"><label class="flabel">${a('ملاحظات','Notes')}</label><input class="fi" id="hrl-notes" placeholder="${a('اختياري','Optional')}"/></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn btn-o" onclick="hrLeaveFormEmpId=null;renderPage('hr')">${a('إلغاء','Cancel')}</button>
+        <button class="btn btn-p" onclick="hrAddLeaveSubmit(${e.id})">${a('حفظ','Save')}</button>
+      </div>
+    </div>
+  </div>`:''}
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-tt">${a('سجل الإجازات','Leave History')}</span>
+      ${canEdit('hr')&&!showForm?`<button class="btn btn-p btn-sm" onclick="hrLeaveFormEmpId=${e.id};renderPage('hr')">+ ${a('طلب إجازة','Leave Request')}</button>`:''}
+    </div>
+    <div class="card-bd" style="padding:${leaves.length?'0':'16px'}">
+      ${!leaves.length?`<div style="text-align:center;color:var(--text3);padding:20px">${a('لا توجد طلبات إجازة','No leave requests')}</div>`:
+        `<div class="tw"><table><thead><tr>
+          <th>${a('النوع','Type')}</th><th>${a('من','From')}</th><th>${a('إلى','To')}</th><th>${a('الأيام','Days')}</th><th>${a('مستند','Doc')}</th><th>${a('الحالة','Status')}</th>${canEdit('hr')?`<th></th>`:''}
+        </tr></thead><tbody>
+          ${leaves.map((l,i)=>`<tr>
+            <td><span class="badge ${l.typeKey==='sick'?'bg-yellow':l.typeKey==='emergency'?'bg-red':l.typeKey==='unpaid'?'bg-gray':'bg-blue'}">${hrEsc(l.type||typeLabel[l.typeKey||'annual'])}</span></td>
+            <td dir="ltr" style="font-size:12px">${hrEsc(l.from||'—')}</td>
+            <td dir="ltr" style="font-size:12px">${hrEsc(l.to||'—')}</td>
+            <td style="text-align:center;font-weight:600">${l.days||0}</td>
+            <td style="font-size:11px;color:var(--text3)">${hrEsc(l.docName||'—')}</td>
+            <td><span class="badge ${l.status==='approved'?'bg-green':l.status==='rejected'?'bg-red':'bg-yellow'}">${l.status==='approved'?a('موافق','Approved'):l.status==='rejected'?a('مرفوض','Rejected'):a('بانتظار','Pending')}</span></td>
+            ${canEdit('hr')?`<td>${l.status==='pending'?`<span style="display:flex;gap:4px">
+              <button class="btn btn-sm" style="background:#1e7a52;color:#fff;border:none" onclick="hrUpdateLeave(${e.id},${i},'approved')">${a('قبول','Approve')}</button>
+              <button class="btn btn-sm" style="background:#c0392b;color:#fff;border:none" onclick="hrUpdateLeave(${e.id},${i},'rejected')">${a('رفض','Reject')}</button>
+            </span>`:'—'}</td>`:''}
+          </tr>`).join('')}
+        </tbody></table></div>`}
+    </div>
+  </div>`;
 }
+
+function hrCommissionsTab(e){
+  const comms=hrEmpCommissions(e);
+  const total=comms.reduce((s,r)=>s+(r.commissionAmount||0),0);
+  return `
+  <div class="card" style="margin-bottom:16px"><div class="card-bd" style="display:flex;gap:24px;flex-wrap:wrap;padding:16px">
+    <div><div style="font-size:24px;font-weight:700;color:var(--blue)" dir="ltr">SAR ${total.toLocaleString()}</div><div style="font-size:12px;color:var(--text2)">${a('إجمالي العمولات','Total Commissions')}</div></div>
+    <div><div style="font-size:24px;font-weight:700">${comms.length}</div><div style="font-size:12px;color:var(--text2)">${a('عدد الطلبات','Requests')}</div></div>
+    ${(e.commission||0)>0?`<div><div style="font-size:24px;font-weight:700;color:#6b46a8">${e.commission}%</div><div style="font-size:12px;color:var(--text2)">${a('نسبة العمولة','Rate')}</div></div>`:''}
+  </div></div>
+  <div class="card">
+    <div class="card-hd"><span class="card-tt">${a('الطلبات المكتملة','Completed Requests')}</span></div>
+    <div class="card-bd" style="padding:${comms.length?'0':'16px'}">
+      ${!comms.length?`<div style="text-align:center;color:var(--text3);padding:20px">${a('لا توجد عمولات مسجلة','No recorded commissions')}</div>`:
+        `<div class="tw"><table><thead><tr><th>${a('المرجع','Ref')}</th><th>${a('العميل','Client')}</th><th>${a('العمولة','Commission')}</th><th>${a('التاريخ','Date')}</th></tr></thead><tbody>
+          ${comms.map(r=>`<tr>
+            <td style="font-family:'Inter',sans-serif;font-size:12px">${hrEsc(r.ref||String(r.id))}</td>
+            <td>${hrEsc(r.contactName||'—')}</td>
+            <td dir="ltr" style="font-weight:600;color:#1e7a52">SAR ${(r.commissionAmount||0).toLocaleString()}</td>
+            <td style="font-size:12px;color:var(--text2)">${hrEsc(r.updated||r.created||'—')}</td>
+          </tr>`).join('')}
+        </tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+function hrDocExpiryState(d){
+  if(!d.expiry) return null;
+  const days = Math.round((new Date(d.expiry)-Date.now())/86400000);
+  if(days<0) return {state:'expired', days, color:'#c0392b', label:a('منتهية','Expired')};
+  if(days<=30) return {state:'soon', days, color:'#b8740f', label:a(`تنتهي خلال ${days} يوم`,`Expires in ${days}d`)};
+  if(days<=90) return {state:'warn', days, color:'#d4a017', label:a(`تنتهي خلال ${days} يوم`,`Expires in ${days}d`)};
+  return {state:'ok', days, color:'#1e7a52', label:a(`صالحة لـ ${days} يوم`,`Valid ${days}d`)};
+}
+
+function hrDocsTab(e){
+  const docs=e.docs||[];
+  return `
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-tt">${a('مستندات الموظف','Employee Documents')}</span>
+      ${canEdit('hr')?`<button class="btn btn-p btn-sm" onclick="hrAddDocPrompt(${e.id})">+ ${a('إضافة مستند','Add Document')}</button>`:''}
+    </div>
+    <div class="card-bd" style="padding:${docs.length?'12px':'16px'}">
+      ${!docs.length?`<div style="text-align:center;color:var(--text3);padding:20px">${a('لا توجد مستندات','No documents')}</div>`:
+        `<div style="display:flex;flex-direction:column;gap:8px">
+          ${docs.map((d,i)=>{
+            const exp=hrDocExpiryState(d);
+            const border=exp?(exp.state==='expired'?'#fca5a5':exp.state==='soon'?'#fcd34d':'var(--border)'):'var(--border)';
+            return `<div style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg);border-radius:8px;border:1px solid ${border}">
+              <div style="flex:1">
+                <div style="font-size:13px;font-weight:600">${hrEsc(d.name||a('مستند','Document'))}</div>
+                <div style="font-size:11px;color:var(--text3)">${hrEsc(d.type||'')}${d.date?' · '+hrEsc(d.date):''}${d.expiry?' · '+a('ينتهي','exp')+' '+hrEsc(d.expiry):''}</div>
+              </div>
+              ${exp?`<span style="font-size:11px;font-weight:600;color:${exp.color};white-space:nowrap">${exp.label}</span>`:''}
+              ${canEdit('hr')?`<button class="btn btn-sm" style="color:#c0392b;border-color:#c0392b;background:transparent" onclick="hrRemoveDoc(${e.id},${i})">${a('حذف','Remove')}</button>`:''}
+            </div>`;
+          }).join('')}
+        </div>`}
+    </div>
+  </div>`;
+}
+
+/* ── EDIT SHEET ── */
+function hrEditSheet(){
+  const e=hrCurrentId?employees.find(x=>x.id===hrCurrentId):null;
+  const v=(f,def='')=>e!=null?(e[f]!=null?e[f]:def):def;
+  const title=e?a('تعديل موظف','Edit Employee'):a('موظف جديد','New Employee');
+  const sel=(f,val)=>v(f)===val?'selected':'';
+  return `
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+    <button class="btn btn-o btn-sm" onclick="hrCancelEdit()" style="display:flex;align-items:center;gap:4px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+      ${a('رجوع','Back')}
+    </button>
+    <span style="color:var(--text3);font-size:13px">/ ${a('الموارد البشرية','HR')} / ${title}</span>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('المعلومات الشخصية','Personal Info')}</span></div>
+      <div class="card-bd"><div class="fg-grid">
+        <div class="fg"><label class="flabel">${a('الاسم عربي *','Arabic Name *')}</label><input class="fi" id="hre-name" value="${hrEsc(v('name'))}"/></div>
+        <div class="fg"><label class="flabel">${a('الاسم إنجليزي','English Name')}</label><input class="fi" id="hre-nameEn" dir="ltr" value="${hrEsc(v('nEn'))}"/></div>
+        <div class="fg"><label class="flabel">${a('الجنسية','Nationality')}</label>
+          <select class="fs" id="hre-nationality">
+            <option value="">— ${a('اختر','Select')} —</option>
+            <option value="saudi" ${sel('nationality','saudi')}>${a('سعودي','Saudi')}</option>
+            <option value="non-saudi" ${sel('nationality','non-saudi')}>${a('غير سعودي','Non-Saudi')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('نوع الهوية','ID Type')}</label>
+          <select class="fs" id="hre-idType">
+            <option value="">— ${a('اختر','Select')} —</option>
+            <option value="national_id" ${sel('idType','national_id')}>${a('هوية وطنية','National ID')}</option>
+            <option value="iqama" ${sel('idType','iqama')}>${a('إقامة','Iqama')}</option>
+            <option value="passport" ${sel('idType','passport')}>${a('جواز سفر','Passport')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('رقم الهوية','ID Number')}</label><input class="fi" id="hre-idnum" dir="ltr" value="${hrEsc(v('idnum'))}"/></div>
+        <div class="fg"><label class="flabel">${a('انتهاء الهوية','ID Expiry')}</label><input class="fi" id="hre-idexp" type="date" value="${hrEsc(v('idexp'))}"/></div>
+        <div class="fg"><label class="flabel">${a('تاريخ الميلاد','Birth Date')}</label><input class="fi" id="hre-birthDate" type="date" value="${hrEsc(v('birthDate'))}"/></div>
+        <div class="fg"><label class="flabel">${a('الجنس','Gender')}</label>
+          <select class="fs" id="hre-gender">
+            <option value="">— ${a('اختر','Select')} —</option>
+            <option value="male" ${sel('gender','male')}>${a('ذكر','Male')}</option>
+            <option value="female" ${sel('gender','female')}>${a('أنثى','Female')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('الحالة الاجتماعية','Marital Status')}</label>
+          <select class="fs" id="hre-maritalStatus">
+            <option value="">— ${a('اختر','Select')} —</option>
+            <option value="single" ${sel('maritalStatus','single')}>${a('أعزب','Single')}</option>
+            <option value="married" ${sel('maritalStatus','married')}>${a('متزوج','Married')}</option>
+            <option value="divorced" ${sel('maritalStatus','divorced')}>${a('مطلق','Divorced')}</option>
+            <option value="widowed" ${sel('maritalStatus','widowed')}>${a('أرمل','Widowed')}</option>
+          </select></div>
+      </div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('معلومات الوظيفة','Employment Details')}</span></div>
+      <div class="card-bd"><div class="fg-grid">
+        <div class="fg"><label class="flabel">${a('رقم الموظف','Employee #')}</label><input class="fi" id="hre-employeeNo" dir="ltr" value="${hrEsc(v('employeeNo'))}"/></div>
+        <div class="fg"><label class="flabel">${a('المسمى الوظيفي','Job Title')}</label><input class="fi" id="hre-jobTitle" value="${hrEsc(v('jobTitle'))}"/></div>
+        <div class="fg"><label class="flabel">${a('القسم','Department')}</label>
+          <select class="fs" id="hre-dept">
+            <option value="finance" ${sel('dept','finance')}>${a('المالية','Finance')}</option>
+            <option value="sales" ${sel('dept','sales')||(!e?'selected':'')}>${a('المبيعات','Sales')}</option>
+            <option value="operations" ${sel('dept','operations')}>${a('الأوبريشن','Operations')}</option>
+            <option value="customers" ${sel('dept','customers')}>${a('خدمة العملاء','Customers')}</option>
+            <option value="hr" ${sel('dept','hr')}>${a('الموارد البشرية','HR')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('الدور','Role')}</label>
+          <select class="fs" id="hre-role">
+            <option value="employee" ${sel('role','employee')||(!e?'selected':'')}>${a('موظف','Employee')}</option>
+            <option value="manager" ${sel('role','manager')}>${a('مدير قسم','Manager')}</option>
+            <option value="superadmin" ${sel('role','superadmin')}>${a('مدير النظام','Admin')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('نوع العقد','Contract')}</label>
+          <select class="fs" id="hre-contractType">
+            <option value="full_time" ${sel('contractType','full_time')||(!e?'selected':'')}>${a('دوام كامل','Full-time')}</option>
+            <option value="part_time" ${sel('contractType','part_time')}>${a('دوام جزئي','Part-time')}</option>
+            <option value="contract" ${sel('contractType','contract')}>${a('عقد مؤقت','Contract')}</option>
+            <option value="probation" ${sel('contractType','probation')}>${a('تجريبي','Probation')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('نهاية فترة التجربة','Probation End')}</label><input class="fi" id="hre-probationEnd" type="date" value="${hrEsc(v('probationEnd'))}"/></div>
+        <div class="fg"><label class="flabel">${a('تاريخ التعيين','Joined Date')}</label><input class="fi" id="hre-joined" type="date" value="${hrEsc(v('joined'))}"/></div>
+        <div class="fg"><label class="flabel">${a('الحالة','Status')}</label>
+          <select class="fs" id="hre-status">
+            <option value="active" ${sel('status','active')||(!e?'selected':'')}>${a('نشط','Active')}</option>
+            <option value="inactive" ${sel('status','inactive')}>${a('غير نشط','Inactive')}</option>
+          </select></div>
+        <div class="fg"><label class="flabel">${a('الجوال','Phone')}</label><input class="fi" id="hre-phone" type="tel" dir="ltr" value="${hrEsc(v('phone'))}"/></div>
+        <div class="fg"><label class="flabel">${a('البريد الإلكتروني','Email')}</label><input class="fi" id="hre-email" type="email" dir="ltr" value="${hrEsc(v('email'))}"/></div>
+      </div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('هيكل الراتب','Salary Structure')}</span></div>
+      <div class="card-bd"><div class="fg-grid">
+        <div class="fg"><label class="flabel">${a('الراتب الأساسي (ر.س)','Basic Salary (SAR)')}</label><input class="fi" id="hre-basicSalary" type="number" min="0" dir="ltr" value="${v('basicSalary',v('salary',0))}"/></div>
+        <div class="fg"><label class="flabel">${a('بدل سكن (ر.س)','Housing (SAR)')}</label><input class="fi" id="hre-housingAllowance" type="number" min="0" dir="ltr" value="${v('housingAllowance',0)}"/></div>
+        <div class="fg"><label class="flabel">${a('بدل نقل (ر.س)','Transport (SAR)')}</label><input class="fi" id="hre-transportAllowance" type="number" min="0" dir="ltr" value="${v('transportAllowance',0)}"/></div>
+        <div class="fg"><label class="flabel">${a('بدل جوال (ر.س)','Mobile (SAR)')}</label><input class="fi" id="hre-mobileAllowance" type="number" min="0" dir="ltr" value="${v('mobileAllowance',0)}"/></div>
+        <div class="fg"><label class="flabel">${a('بدلات أخرى (ر.س)','Other (SAR)')}</label><input class="fi" id="hre-otherAllowances" type="number" min="0" dir="ltr" value="${v('otherAllowances',0)}"/></div>
+        <div class="fg"><label class="flabel">${a('نسبة العمولة %','Commission %')}</label><input class="fi" id="hre-commission" type="number" min="0" max="100" dir="ltr" value="${v('commission',0)}"/></div>
+      </div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-tt">${a('العنوان','Address')}</span></div>
+      <div class="card-bd"><textarea class="fi" id="hre-address" rows="3" style="resize:vertical;width:100%">${hrEsc(v('address'))}</textarea></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;padding-bottom:20px">
+      <button class="btn btn-o" onclick="hrCancelEdit()">${a('إلغاء','Cancel')}</button>
+      <button class="btn btn-p" onclick="hrSaveEmployee()">${a('حفظ','Save')}</button>
+    </div>
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════
+   ACTIONS
+══════════════════════════════════════════════════ */
+function hrOpenView(id){ hrCurrentId=id; hrMode='view'; hrViewTab='info'; renderPage('hr'); }
+function hrOpenEdit(id){ hrCurrentId=id||null; hrMode='edit'; renderPage('hr'); }
+function hrNewEmployee(){ hrCurrentId=null; hrMode='edit'; renderPage('hr'); }
+function hrCancelEdit(){ hrMode=hrCurrentId?'view':'list'; if(!hrCurrentId) hrCurrentId=null; renderPage('hr'); }
+
+function hrGf(id){ const el=document.getElementById(id); return el?el.value.trim():''; }
+function hrGn(id){ return parseFloat(document.getElementById(id)?.value)||0; }
 
 async function hrSaveEmployee(){
-  const name = document.getElementById('hr-name').value.trim();
-  const nEn = document.getElementById('hr-nameEn').value.trim();
+  const name=hrGf('hre-name');
   if(!name){ alert(a('الاسم مطلوب','Name is required')); return; }
-  const data = {
-    name, nEn,
-    dept: document.getElementById('hr-dept').value,
-    role: document.getElementById('hr-role').value,
-    salary: parseFloat(document.getElementById('hr-salary').value)||0,
-    commission: parseFloat(document.getElementById('hr-commission').value)||0,
-    phone: document.getElementById('hr-phone').value.trim(),
-    email: document.getElementById('hr-email').value.trim(),
-    status: 'active'
+  const data={
+    name, nEn:hrGf('hre-nameEn'),
+    nationality:hrGf('hre-nationality'), idType:hrGf('hre-idType'), idnum:hrGf('hre-idnum'),
+    idexp:hrGf('hre-idexp'), birthDate:hrGf('hre-birthDate'), gender:hrGf('hre-gender'), maritalStatus:hrGf('hre-maritalStatus'),
+    employeeNo:hrGf('hre-employeeNo'), jobTitle:hrGf('hre-jobTitle'),
+    dept:hrGf('hre-dept')||'sales', role:hrGf('hre-role')||'employee',
+    contractType:hrGf('hre-contractType')||'full_time', probationEnd:hrGf('hre-probationEnd'),
+    joined:hrGf('hre-joined')||new Date().toISOString().slice(0,10),
+    status:hrGf('hre-status')||'active',
+    phone:hrGf('hre-phone'), email:hrGf('hre-email'),
+    basicSalary:hrGn('hre-basicSalary'), housingAllowance:hrGn('hre-housingAllowance'),
+    transportAllowance:hrGn('hre-transportAllowance'), mobileAllowance:hrGn('hre-mobileAllowance'),
+    otherAllowances:hrGn('hre-otherAllowances'), commission:hrGn('hre-commission'),
+    salary:hrGn('hre-basicSalary'),
+    address:document.getElementById('hre-address')?.value.trim()||''
   };
   let empId;
-  if(hrEditId){
-    const idx = employees.findIndex(e=>e.id===hrEditId);
-    if(idx!==-1){ employees[idx] = {...employees[idx], ...data}; empId = hrEditId; sbUpdate('employees', empId, employees[idx]); }
+  if(hrCurrentId){
+    const idx=employees.findIndex(e=>e.id===hrCurrentId);
+    if(idx!==-1){ employees[idx]={...employees[idx],...data}; empId=hrCurrentId; sbUpdate('employees',empId,employees[idx]); }
   } else {
-    const ne = await sbInsert('employees', {joined: new Date().toISOString().slice(0,10), ...data});
-    employees.push(ne); empId = ne.id;
+    const ne=await sbInsert('employees',{...data,leaveRequests:[],docs:[]});
+    if(ne){ employees.push(ne); empId=ne.id; }
+    else { const fallback={id:Date.now(),...data,leaveRequests:[],docs:[],_contactId:null}; employees.push(fallback); empId=fallback.id; }
   }
-  // مزامنة مع جهات الاتصال (cat: employee)
-  const contactData = {
-    name: data.name, cat: 'employee', status: 'active',
-    person: data.name, title: hrRoleLabel(data.role),
-    phone: data.phone, email: data.email, address: '',
-    notes: a('قسم: ','Dept: ') + hrDeptLabel(data.dept), _empId: empId
-  };
-  const existingIdx = contacts.findIndex(c => c._empId === empId);
-  if(existingIdx !== -1){
-    contacts[existingIdx] = {...contacts[existingIdx], ...contactData};
-    sbUpdate('contacts', contacts[existingIdx].id, contacts[existingIdx]);
+  // Sync with contacts (bidirectional)
+  const contactData={name:data.name,cat:'employee',status:'active',person:data.name,title:data.jobTitle||hrRoleLabel(data.role),phone:data.phone,email:data.email,notes:a('قسم: ','Dept: ')+hrDeptLabel(data.dept),_empId:empId};
+  const cIdx=contacts.findIndex(c=>c._empId===empId);
+  if(cIdx!==-1){
+    contacts[cIdx]={...contacts[cIdx],...contactData};
+    sbUpdate('contacts',contacts[cIdx].id,contacts[cIdx]);
+    const emp=employees.find(x=>x.id===empId); if(emp) emp._contactId=contacts[cIdx].id;
   } else {
-    const nc = await sbInsert('contacts', contactData);
-    contacts.push(nc);
+    const nc=await sbInsert('contacts',contactData);
+    if(nc){ contacts.push(nc); const emp=employees.find(x=>x.id===empId); if(emp){ emp._contactId=nc.id; sbUpdate('employees',empId,{_contactId:nc.id}); } }
   }
-  closeM('hrModal');
-  navigate('hr');
+  hrCurrentId=empId; hrMode='view'; hrViewTab='info'; renderPage('hr');
 }
+
+function hrAddLeavePrompt(empId){
+  hrLeaveFormEmpId=empId;
+  hrViewTab='leaves';
+  renderPage('hr');
+}
+
+function hrUpdateLeave(empId,leaveIdx,status){
+  const e=employees.find(x=>x.id===empId); if(!e||!e.leaveRequests) return;
+  e.leaveRequests[leaveIdx].status=status;
+  sbUpdate('employees',empId,{leaveRequests:e.leaveRequests});
+  renderPage('hr');
+}
+
+
+function hrRemoveDoc(empId,docIdx){
+  if(!confirm(a('هل تريد حذف هذا المستند؟','Remove this document?'))) return;
+  const e=employees.find(x=>x.id===empId); if(!e||!e.docs) return;
+  e.docs.splice(docIdx,1);
+  sbUpdate('employees',empId,{docs:e.docs});
+  renderPage('hr');
+}
+
+/* ══════════════════════════════════════════════════
+   PAYROLL TAB (per employee)
+══════════════════════════════════════════════════ */
+function hrPayrollTab(e){
+  const history=(e.payrollHistory||[]).slice().sort((a,b)=>b.year-a.year||b.month-a.month);
+  const now=new Date();
+  const curMonth=now.getMonth()+1;
+  const curYear=now.getFullYear();
+  const hasThisMonth=history.some(p=>p.month===curMonth&&p.year===curYear);
+  const monthNames=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const monthNamesEn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mLabel=(m,y)=>`${lang==='ar'?monthNames[m-1]:monthNamesEn[m-1]} ${y}`;
+  const totalPaid=history.filter(p=>p.status==='paid').reduce((s,p)=>s+(p.netPay||0),0);
+  return `
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+    <div class="card" style="flex:1;min-width:200px"><div class="card-bd" style="padding:16px">
+      <div style="font-size:22px;font-weight:700;color:var(--blue)" dir="ltr">SAR ${hrTotalSalary(e).toLocaleString()}</div>
+      <div style="font-size:12px;color:var(--text2)">${a('الراتب الشهري الحالي','Current Monthly Salary')}</div>
+    </div></div>
+    <div class="card" style="flex:1;min-width:200px"><div class="card-bd" style="padding:16px">
+      <div style="font-size:22px;font-weight:700;color:#1e7a52" dir="ltr">SAR ${totalPaid.toLocaleString()}</div>
+      <div style="font-size:12px;color:var(--text2)">${a('إجمالي المصروف','Total Paid Out')}</div>
+    </div></div>
+    ${canEdit('hr')?`<div style="display:flex;align-items:center">
+      ${!hasThisMonth?`<button class="btn btn-p" onclick="hrRunPayroll(${e.id},${curMonth},${curYear})">
+        + ${a('تشغيل راتب','Run Payroll')} ${mLabel(curMonth,curYear)}
+      </button>`:`<span style="color:var(--text3);font-size:13px">${a('تم تشغيل راتب هذا الشهر','Payroll run for this month')}</span>`}
+    </div>`:''}
+  </div>
+  <div class="card">
+    <div class="card-hd"><span class="card-tt">${a('سجل الرواتب','Payroll History')}</span></div>
+    <div class="card-bd" style="padding:${history.length?'0':'16px'}">
+      ${!history.length?`<div style="text-align:center;color:var(--text3);padding:20px">${a('لا يوجد سجل رواتب','No payroll records yet')}</div>`:
+        `<div class="tw"><table><thead><tr>
+          <th>${a('الشهر','Month')}</th>
+          <th>${a('الراتب الإجمالي','Total')}</th>
+          <th>${a('جوسي (موظف)','GOSI Emp.')}</th>
+          <th>${a('خصومات أخرى','Other Ded.')}</th>
+          <th>${a('الصافي','Net Pay')}</th>
+          <th>${a('الحالة','Status')}</th>
+          ${canEdit('hr')?`<th></th>`:''}
+        </tr></thead><tbody>
+          ${history.map((p,i)=>{
+            const otherDed=(p.otherDeductions||[]).reduce((s,d)=>s+(d.amount||0),0);
+            return `<tr>
+              <td style="font-weight:600">${mLabel(p.month,p.year)}</td>
+              <td dir="ltr">SAR ${(p.total||0).toLocaleString()}</td>
+              <td dir="ltr" style="color:#c0392b">SAR ${(p.gosiEmp||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+              <td dir="ltr">${otherDed?`SAR ${otherDed.toLocaleString()}`:'—'}</td>
+              <td dir="ltr" style="font-weight:700;color:#1e7a52">SAR ${(p.netPay||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+              <td><span class="badge ${p.status==='paid'?'bg-green':'bg-yellow'}">${p.status==='paid'?a('صُرف','Paid'):a('بانتظار','Pending')}</span>
+                ${p.paidDate?`<div style="font-size:10px;color:var(--text3)">${hrEsc(p.paidDate)}</div>`:''}</td>
+              ${canEdit('hr')?`<td>
+                ${p.status==='pending'?`<button class="btn btn-sm" style="background:#1e7a52;color:#fff;border:none" onclick="hrMarkPayrollPaid(${e.id},${i})">${a('تأكيد الصرف','Mark Paid')}</button>`:''}
+                <button class="btn btn-sm btn-o" style="margin-top:2px" onclick="hrPayrollAddDeduction(${e.id},${i})">${a('+ خصم','+ Deduct')}</button>
+              </td>`:''}
+            </tr>`;
+          }).join('')}
+        </tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════
+   PERFORMANCE TAB
+══════════════════════════════════════════════════ */
+function hrPerformanceTab(e){
+  const reviews=(e.performance||[]).slice().sort((a,b)=>b.date?.localeCompare(a.date||'')||0);
+  const showForm=hrPerfFormEmpId===e.id;
+  const stars=(n)=>'★'.repeat(n)+'☆'.repeat(5-n);
+  const avgScore=reviews.length?reviews.reduce((s,r)=>s+(r.score||0),0)/reviews.length:0;
+  return `
+  ${avgScore>0?`<div class="card" style="margin-bottom:16px"><div class="card-bd" style="padding:16px;display:flex;gap:20px;align-items:center">
+    <div><div style="font-size:32px;color:#b8740f">${stars(Math.round(avgScore))}</div><div style="font-size:12px;color:var(--text2)">${a('متوسط الأداء','Avg. Performance')} — ${avgScore.toFixed(1)}/5</div></div>
+    <div style="font-size:28px;font-weight:700;color:#b8740f">${avgScore.toFixed(1)}</div>
+  </div></div>`:''}
+  ${showForm?`<div class="card" style="margin-bottom:16px;border:2px solid var(--blue)">
+    <div class="card-hd"><span class="card-tt">${a('إضافة تقييم','Add Performance Review')}</span></div>
+    <div class="card-bd"><div class="fg-grid">
+      <div class="fg"><label class="flabel">${a('الفترة','Period')}</label><input class="fi" id="hrp-period" placeholder="${a('مثال: 2026-Q1','e.g. 2026-Q2')}"/></div>
+      <div class="fg"><label class="flabel">${a('التقييم (1-5)','Score (1-5)')}</label>
+        <select class="fs" id="hrp-score">
+          <option value="5">5 — ${a('ممتاز','Excellent')}</option>
+          <option value="4">4 — ${a('جيد جداً','Very Good')}</option>
+          <option value="3" selected>3 — ${a('جيد','Good')}</option>
+          <option value="2">2 — ${a('مقبول','Acceptable')}</option>
+          <option value="1">1 — ${a('ضعيف','Poor')}</option>
+        </select></div>
+      <div class="fg"><label class="flabel">${a('المقيّم','Reviewer')}</label><input class="fi" id="hrp-reviewer" placeholder="${a('اسم المقيّم','Reviewer name')}"/></div>
+      <div class="fg"><label class="flabel">${a('التاريخ','Date')}</label><input class="fi" id="hrp-date" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div class="fg" style="grid-column:1/-1"><label class="flabel">${a('ملاحظات','Notes')}</label><textarea class="fi" id="hrp-notes" rows="2" style="resize:vertical"></textarea></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-o" onclick="hrPerfFormEmpId=null;renderPage('hr')">${a('إلغاء','Cancel')}</button>
+      <button class="btn btn-p" onclick="hrAddPerfReview(${e.id})">${a('حفظ','Save')}</button>
+    </div></div>
+  </div>`:''}
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-tt">${a('سجل التقييمات','Performance Reviews')}</span>
+      ${canEdit('hr')&&!showForm?`<button class="btn btn-p btn-sm" onclick="hrPerfFormEmpId=${e.id};renderPage('hr')">+ ${a('إضافة تقييم','Add Review')}</button>`:''}
+    </div>
+    <div class="card-bd" style="padding:${reviews.length?'0':'16px'}">
+      ${!reviews.length?`<div style="text-align:center;color:var(--text3);padding:20px">${a('لا توجد تقييمات','No reviews yet')}</div>`:
+        `<div class="tw"><table><thead><tr>
+          <th>${a('الفترة','Period')}</th><th>${a('التقييم','Score')}</th><th>${a('المقيّم','Reviewer')}</th><th>${a('التاريخ','Date')}</th><th>${a('ملاحظات','Notes')}</th>
+        </tr></thead><tbody>
+          ${reviews.map(r=>`<tr>
+            <td style="font-weight:600">${hrEsc(r.period||'—')}</td>
+            <td style="font-size:18px;color:#b8740f;letter-spacing:-1px">${stars(r.score||0)}</td>
+            <td>${hrEsc(r.reviewer||'—')}</td>
+            <td dir="ltr" style="font-size:12px;color:var(--text2)">${hrEsc(r.date||'—')}</td>
+            <td style="font-size:12px;color:var(--text2);max-width:200px">${hrEsc(r.notes||'—')}</td>
+          </tr>`).join('')}
+        </tbody></table></div>`}
+    </div>
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════
+   PAYROLL PAGE (list sub-tab — all employees)
+══════════════════════════════════════════════════ */
+function hrPayrollPage(){
+  const monthNames=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const monthNamesEn=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mLabel=(m,y)=>`${lang==='ar'?monthNames[m-1]:monthNamesEn[m-1]} ${y}`;
+  const active=employees.filter(e=>e.status==='active');
+  const totalNet=active.reduce((s,e)=>{
+    const rec=(e.payrollHistory||[]).find(p=>p.month===hrPayrollMonth&&p.year===hrPayrollYear);
+    return s+(rec?rec.netPay:hrTotalSalary(e)-hrGosiEmployee(e));
+  },0);
+  const paidCount=active.filter(e=>(e.payrollHistory||[]).some(p=>p.month===hrPayrollMonth&&p.year===hrPayrollYear&&p.status==='paid')).length;
+  return `
+  ${heading(a('الموارد البشرية','Human Resources'),a('مسير الرواتب','Payroll Run'))}
+  ${hrSubTabs('payroll')}
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <select class="fs" style="width:auto" onchange="hrPayrollMonth=+this.value;renderPage('hr')">
+      ${Array.from({length:12},(_,i)=>`<option value="${i+1}" ${hrPayrollMonth===i+1?'selected':''}>${lang==='ar'?monthNames[i]:monthNamesEn[i]}</option>`).join('')}
+    </select>
+    <select class="fs" style="width:auto" onchange="hrPayrollYear=+this.value;renderPage('hr')">
+      ${[2024,2025,2026,2027].map(y=>`<option value="${y}" ${hrPayrollYear===y?'selected':''}>${y}</option>`).join('')}
+    </select>
+    ${canEdit('hr')?`<button class="btn btn-p" onclick="hrRunPayrollAll()">${a('تشغيل الرواتب للكل','Run All Payrolls')} — ${mLabel(hrPayrollMonth,hrPayrollYear)}</button>`:''}
+    <span style="color:var(--text3);font-size:13px">${paidCount}/${active.length} ${a('تم الصرف','paid')}</span>
+  </div>
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-tt">${a('مسير رواتب','Payroll Run')} — ${mLabel(hrPayrollMonth,hrPayrollYear)}</span>
+      <span style="font-size:13px;color:var(--text2)">${a('الإجمالي الصافي','Total Net')}: <strong dir="ltr">SAR ${totalNet.toLocaleString(undefined,{maximumFractionDigits:0})}</strong></span>
+    </div>
+    <div class="card-bd" style="padding:0">
+      <div class="tw"><table><thead><tr>
+        <th>${a('الموظف','Employee')}</th>
+        <th>${a('القسم','Dept')}</th>
+        <th>${a('الراتب الإجمالي','Total')}</th>
+        <th>${a('جوسي','GOSI')}</th>
+        <th>${a('خصومات','Deductions')}</th>
+        <th>${a('الصافي','Net')}</th>
+        <th>${a('الحالة','Status')}</th>
+        ${canEdit('hr')?`<th></th>`:''}
+      </tr></thead><tbody>
+        ${active.map(e=>{
+          const rec=(e.payrollHistory||[]).find(p=>p.month===hrPayrollMonth&&p.year===hrPayrollYear);
+          const total=rec?rec.total:hrTotalSalary(e);
+          const gosi=rec?rec.gosiEmp:hrGosiEmployee(e);
+          const otherDed=rec?(rec.otherDeductions||[]).reduce((s,d)=>s+(d.amount||0),0):0;
+          const net=rec?rec.netPay:total-gosi;
+          const status=rec?rec.status:'none';
+          return `<tr onclick="hrOpenView(${e.id});hrViewTab='payroll'" style="cursor:pointer">
+            <td><div style="font-weight:700">${hrEsc(lang==='ar'?e.name:(e.nEn||e.name))}</div><div style="font-size:11px;color:var(--text3)">${hrEsc(e.jobTitle||hrRoleLabel(e.role))}</div></td>
+            <td>${hrDeptLabel(e.dept)}</td>
+            <td dir="ltr">SAR ${total.toLocaleString()}</td>
+            <td dir="ltr" style="color:#c0392b">SAR ${gosi.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+            <td dir="ltr">${otherDed?`SAR ${otherDed.toLocaleString()}`:'—'}</td>
+            <td dir="ltr" style="font-weight:700;color:#1e7a52">SAR ${net.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+            <td>${status==='paid'?`<span class="badge bg-green">${a('صُرف','Paid')}</span>`:status==='pending'?`<span class="badge bg-yellow">${a('بانتظار','Pending')}</span>`:`<span class="badge bg-gray">${a('لم يُشغَّل','Not Run')}</span>`}</td>
+            ${canEdit('hr')?`<td onclick="event.stopPropagation()">
+              ${!rec?`<button class="btn btn-sm btn-p" onclick="hrRunPayroll(${e.id},${hrPayrollMonth},${hrPayrollYear})">${a('تشغيل','Run')}</button>`:
+                status==='pending'?`<button class="btn btn-sm" style="background:#1e7a52;color:#fff;border:none" onclick="hrMarkPayrollPaidByMonth(${e.id},${hrPayrollMonth},${hrPayrollYear})">${a('تأكيد الصرف','Mark Paid')}</button>`:''}
+            </td>`:''}
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>
+    </div>
+  </div>`;
+}
+
+/* ══════════════════════════════════════════════════
+   EXPIRING DOCS PAGE (list sub-tab)
+══════════════════════════════════════════════════ */
+function hrExpiringPage(){
+  const now=Date.now();
+  const rows=[];
+  employees.forEach(e=>{
+    // Check ID/iqama expiry
+    if(e.idexp){
+      const days=Math.round((new Date(e.idexp)-now)/86400000);
+      if(days<=90) rows.push({e, label:a('هوية/إقامة','ID/Iqama'), expiry:e.idexp, days});
+    }
+    // Check probation end
+    if(e.probationEnd){
+      const days=Math.round((new Date(e.probationEnd)-now)/86400000);
+      if(days<=30) rows.push({e, label:a('نهاية فترة التجربة','Probation End'), expiry:e.probationEnd, days});
+    }
+    // Check docs with expiry
+    (e.docs||[]).forEach(d=>{
+      if(d.expiry){
+        const days=Math.round((new Date(d.expiry)-now)/86400000);
+        if(days<=90) rows.push({e, label:hrEsc(d.name||a('مستند','Doc')), expiry:d.expiry, days});
+      }
+    });
+  });
+  rows.sort((a,b)=>a.days-b.days);
+  return `
+  ${heading(a('الموارد البشرية','Human Resources'),a('وثائق منتهية أو تقترب من الانتهاء','Expiring Documents'))}
+  ${hrSubTabs('expiring')}
+  ${!rows.length?`<div class="card"><div class="card-bd" style="text-align:center;padding:40px;color:var(--text3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg><div style="margin-top:12px">${a('لا توجد وثائق منتهية أو تقترب من الانتهاء خلال 90 يوم','No documents expiring within 90 days')}</div></div></div>`:
+    `<div class="card"><div class="card-bd" style="padding:0">
+      <div class="tw"><table><thead><tr>
+        <th>${a('الموظف','Employee')}</th>
+        <th>${a('القسم','Dept')}</th>
+        <th>${a('المستند','Document')}</th>
+        <th>${a('تاريخ الانتهاء','Expiry')}</th>
+        <th>${a('الحالة','Status')}</th>
+        <th></th>
+      </tr></thead><tbody>
+        ${rows.map(({e,label,expiry,days})=>{
+          const color=days<0?'#c0392b':days<=30?'#b8740f':'#d4a017';
+          const badge=days<0?`<span class="badge bg-red">${a('منتهية','Expired')}</span>`:
+            days<=30?`<span class="badge" style="background:#fef3c7;color:#b8740f">${a(`${days} يوم`,`${days}d`)}</span>`:
+            `<span class="badge bg-yellow">${a(`${days} يوم`,`${days}d`)}</span>`;
+          return `<tr style="background:${days<0?'#fef2f2':days<=30?'#fffbeb':'var(--bg-card)'};cursor:pointer" onclick="hrOpenView(${e.id});hrViewTab='docs'">
+            <td><div style="font-weight:700">${hrEsc(lang==='ar'?e.name:(e.nEn||e.name))}</div></td>
+            <td>${hrDeptLabel(e.dept)}</td>
+            <td style="color:${color};font-weight:600">${label}</td>
+            <td dir="ltr" style="font-weight:600;color:${color}">${hrEsc(expiry)}</td>
+            <td>${badge}</td>
+            <td><button class="btn btn-o btn-sm" onclick="event.stopPropagation();hrOpenView(${e.id})">${a('فتح','View')}</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table></div>
+    </div></div>`}`;
+}
+
+/* ══════════════════════════════════════════════════
+   PAYROLL ACTIONS
+══════════════════════════════════════════════════ */
+function hrRunPayroll(empId, month, year){
+  const e=employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.payrollHistory) e.payrollHistory=[];
+  if(e.payrollHistory.some(p=>p.month===month&&p.year===year)){
+    alert(a('يوجد مسير راتب لهذا الشهر بالفعل','Payroll already exists for this month')); return;
+  }
+  const total=hrTotalSalary(e);
+  const gosiEmp=hrGosiEmployee(e);
+  const rec={month,year,basic:e.basicSalary||e.salary||0,housing:e.housingAllowance||0,transport:e.transportAllowance||0,mobile:e.mobileAllowance||0,other:e.otherAllowances||0,total,gosiEmp,gosiEr:hrGosiEmployer(e),otherDeductions:[],netPay:total-gosiEmp,status:'pending',created:new Date().toISOString().slice(0,10)};
+  e.payrollHistory.push(rec);
+  sbUpdate('employees',empId,{payrollHistory:e.payrollHistory});
+  renderPage('hr');
+}
+
+function hrRunPayrollAll(){
+  const active=employees.filter(e=>e.status==='active');
+  active.forEach(e=>{
+    if(!(e.payrollHistory||[]).some(p=>p.month===hrPayrollMonth&&p.year===hrPayrollYear)){
+      hrRunPayroll(e.id,hrPayrollMonth,hrPayrollYear);
+    }
+  });
+}
+
+function hrMarkPayrollPaid(empId, histIdx){
+  const e=employees.find(x=>x.id===empId); if(!e||!e.payrollHistory) return;
+  e.payrollHistory[histIdx].status='paid';
+  e.payrollHistory[histIdx].paidDate=new Date().toISOString().slice(0,10);
+  sbUpdate('employees',empId,{payrollHistory:e.payrollHistory});
+  renderPage('hr');
+}
+
+function hrMarkPayrollPaidByMonth(empId, month, year){
+  const e=employees.find(x=>x.id===empId); if(!e||!e.payrollHistory) return;
+  const idx=e.payrollHistory.findIndex(p=>p.month===month&&p.year===year); if(idx===-1) return;
+  e.payrollHistory[idx].status='paid';
+  e.payrollHistory[idx].paidDate=new Date().toISOString().slice(0,10);
+  sbUpdate('employees',empId,{payrollHistory:e.payrollHistory});
+  renderPage('hr');
+}
+
+function hrPayrollAddDeduction(empId, histIdx){
+  const name=prompt(a('اسم الخصم:','Deduction name:')); if(!name) return;
+  const amount=parseFloat(prompt(a('المبلغ (ر.س):','Amount (SAR):')));
+  if(!amount||isNaN(amount)) return;
+  const e=employees.find(x=>x.id===empId); if(!e||!e.payrollHistory) return;
+  const rec=e.payrollHistory[histIdx]; if(!rec) return;
+  if(!rec.otherDeductions) rec.otherDeductions=[];
+  rec.otherDeductions.push({name,amount});
+  rec.netPay=rec.total-rec.gosiEmp-rec.otherDeductions.reduce((s,d)=>s+(d.amount||0),0);
+  sbUpdate('employees',empId,{payrollHistory:e.payrollHistory});
+  renderPage('hr');
+}
+
+/* ══════════════════════════════════════════════════
+   PERFORMANCE ACTIONS
+══════════════════════════════════════════════════ */
+function hrAddPerfReview(empId){
+  const period=document.getElementById('hrp-period')?.value.trim();
+  const score=parseInt(document.getElementById('hrp-score')?.value)||3;
+  const reviewer=document.getElementById('hrp-reviewer')?.value.trim()||'';
+  const date=document.getElementById('hrp-date')?.value||new Date().toISOString().slice(0,10);
+  const notes=document.getElementById('hrp-notes')?.value.trim()||'';
+  const e=employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.performance) e.performance=[];
+  e.performance.push({id:Date.now(),period,score,reviewer,date,notes});
+  sbUpdate('employees',empId,{performance:e.performance});
+  hrPerfFormEmpId=null;
+  renderPage('hr');
+}
+
+/* ══════════════════════════════════════════════════
+   LEAVE ACTIONS (new)
+══════════════════════════════════════════════════ */
+function hrAddLeaveSubmit(empId){
+  const from=document.getElementById('hrl-from')?.value;
+  const to=document.getElementById('hrl-to')?.value;
+  if(!from||!to){ alert(a('تاريخ البداية والنهاية مطلوبان','From and To dates are required')); return; }
+  const days=Math.max(1,Math.round((new Date(to)-new Date(from))/86400000)+1);
+  const typeKey=document.getElementById('hrl-type')?.value||'annual';
+  const typeLabel={annual:a('سنوية','Annual'),sick:a('مرضية','Sick'),emergency:a('طارئة','Emergency'),unpaid:a('بدون راتب','Unpaid')};
+  const docName=document.getElementById('hrl-doc')?.value.trim()||'';
+  const notes=document.getElementById('hrl-notes')?.value.trim()||'';
+  const e=employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.leaveRequests) e.leaveRequests=[];
+  e.leaveRequests.push({id:Date.now(),typeKey,type:typeLabel[typeKey],from,to,days,status:'pending',docName,notes,requested:new Date().toISOString().slice(0,10)});
+  sbUpdate('employees',empId,{leaveRequests:e.leaveRequests});
+  hrLeaveFormEmpId=null;
+  renderPage('hr');
+}
+
+/* ══════════════════════════════════════════════════
+   TERMINATION
+══════════════════════════════════════════════════ */
+function hrTerminateEmployee(id){
+  const e=employees.find(x=>x.id===id); if(!e) return;
+  const reason=prompt(a(`سبب إنهاء عقد ${e.name}:`,`Reason for terminating ${e.name||'employee'}:`));
+  if(reason===null) return; // cancelled
+  const eos=hrEndOfServiceCalc(e);
+  if(!confirm(a(`تأكيد إنهاء عقد ${e.name}؟\nمكافأة نهاية الخدمة: SAR ${eos.toLocaleString()}`,`Confirm termination of ${e.name}?\nEOS Amount: SAR ${eos.toLocaleString()}`))) return;
+  e.status='terminated';
+  e.terminatedAt=new Date().toISOString().slice(0,10);
+  e.terminatedReason=reason||'';
+  e.eosAmount=eos;
+  sbUpdate('employees',id,{status:'terminated',terminatedAt:e.terminatedAt,terminatedReason:e.terminatedReason,eosAmount:eos});
+  renderPage('hr');
+}
+
+/* ══════════════════════════════════════════════════
+   DOC PROMPT (updated — asks for expiry)
+══════════════════════════════════════════════════ */
+function hrAddDocPrompt(empId){
+  const name=prompt(a('اسم المستند:','Document name:')); if(!name) return;
+  const type=prompt(a('نوع المستند (اختياري):','Document type (optional):')||'')||'';
+  const expiry=prompt(a('تاريخ الانتهاء YYYY-MM-DD (اتركه فارغاً إن لم يكن له تاريخ):','Expiry date YYYY-MM-DD (leave blank if none):')||'')||'';
+  const e=employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.docs) e.docs=[];
+  e.docs.push({name,type,date:new Date().toISOString().slice(0,10),expiry:expiry||null});
+  sbUpdate('employees',empId,{docs:e.docs});
+  renderPage('hr');
+}
+
+/* ── backward compat ── */
+function hrAddModal(){ hrNewEmployee(); }
+function hrEditModal(id){ hrOpenEdit(id); }
+let hrEditId=null;
+function initHR(){ /* sheet-based, no DOM init needed */ }
+function renderHRTable(){ /* no-op */ }
 
 
 /* ===== calendar.js ===== */
